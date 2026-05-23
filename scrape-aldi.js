@@ -1,141 +1,143 @@
-const { chromium } = require('playwright')
-
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://asfnqfhpfufcbjzsrxlz.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
 
 const ALDI_CATEGORIES = [
-  { url: '/products/fruits-vegetables/fresh-fruits/k/1111111152', name: 'fruit' },
-  { url: '/products/fruits-vegetables/fresh-vegetables/k/950000002', name: 'vegetables' },
-  { url: '/products/dairy-eggs-fridge/milk/k/950000003', name: 'milk' },
-  { url: '/products/dairy-eggs-fridge/cheese/k/950000004', name: 'cheese' },
-  { url: '/products/dairy-eggs-fridge/yoghurt/k/950000005', name: 'yoghurt' },
-  { url: '/products/dairy-eggs-fridge/eggs/k/950000006', name: 'eggs' },
-  { url: '/products/pantry/canned-food/k/950000020', name: 'canned' },
-  { url: '/products/pantry/pasta-rice-grains/k/950000024', name: 'pasta-rice' },
-  { url: '/products/pantry/cereals-muesli/k/950000025', name: 'cereal' },
-  { url: '/products/pantry/chips-corn-chips-other/k/950000027', name: 'snacks' },
-  { url: '/products/pantry/confectionery/k/950000026', name: 'confectionery' },
-  { url: '/products/pantry/sauces/k/950000021', name: 'sauces' },
-  { url: '/products/drinks/soft-drinks/k/950000041', name: 'soft-drinks' },
-  { url: '/products/drinks/juice/k/950000042', name: 'juice' },
-  { url: '/products/drinks/water/k/950000043', name: 'water' },
-  { url: '/products/meat-seafood/chicken/k/950000010', name: 'chicken' },
-  { url: '/products/meat-seafood/beef/k/950000011', name: 'beef' },
-  { url: '/products/meat-seafood/pork/k/950000012', name: 'pork' },
-  { url: '/products/frozen/frozen-pizzas/k/950000037', name: 'frozen-pizza' },
-  { url: '/products/frozen/frozen-fruit-vegetables/k/950000034', name: 'frozen-veg' },
-  { url: '/products/bakery/bread/k/950000015', name: 'bread' },
-  { url: '/products/household/cleaning/k/950000050', name: 'cleaning' },
-  { url: '/products/household/laundry/k/950000051', name: 'laundry' },
+  '/products/fruits-vegetables/fresh-fruits/k/1111111152',
+  '/products/fruits-vegetables/fresh-vegetables/k/1111111153',
+  '/products/dairy-eggs-fridge/milk/k/1111111160',
+  '/products/dairy-eggs-fridge/cheese/k/1111111161',
+  '/products/dairy-eggs-fridge/yoghurt/k/1111111162',
+  '/products/dairy-eggs-fridge/eggs/k/1111111163',
+  '/products/pantry/canned-food/k/1111111170',
+  '/products/pantry/pasta-rice-grains/k/1111111171',
+  '/products/pantry/cereals-muesli/k/1111111172',
+  '/products/pantry/chips-corn-chips-other/k/1111111173',
+  '/products/pantry/confectionery/k/1111111174',
+  '/products/pantry/sauces/k/1111111175',
+  '/products/drinks/soft-drinks/k/1111111180',
+  '/products/drinks/juice/k/1111111181',
+  '/products/drinks/water/k/1111111182',
+  '/products/meat-seafood/chicken/k/1111111191',
+  '/products/meat-seafood/beef/k/1111111192',
+  '/products/meat-seafood/pork/k/1111111193',
+  '/products/frozen/frozen-pizzas/k/1111111207',
+  '/products/frozen/frozen-fruit-vegetables/k/1111111208',
+  '/products/bakery/bread/k/1111111216',
+  '/products/household/cleaning/k/1111111240',
+  '/products/household/laundry/k/1111111241',
 ]
 
-async function scrapeAldi() {
-  console.log('Starting Aldi scrape...')
-  const browser = await chromium.launch({ headless: true })
-  const page = await browser.newPage()
+function extractProducts(html) {
+  const products = []
+  // Extract product names from image URLs: /uuid/ProductName
+  const imgPattern = /dm\.apac\.cms\.aldi\.cx\/is\/image\/aldiprodapac\/product\/jpg\/scaleWidth\/306\/([a-f0-9-]{36})\/([^"&\s]+)/g
+  const seen = new Map() // uuid -> name
+  let match
+  while ((match = imgPattern.exec(html)) !== null) {
+    const uuid = match[1]
+    const name = decodeURIComponent(match[2]).trim()
+    if (name.length > 2 && !seen.has(uuid)) {
+      seen.set(uuid, { name, uuid })
+    }
+  }
+
+  // Extract prices - pattern: $X.XX appearing in price elements
+  // Prices appear in order matching products in the HTML
+  const pricePattern = /\$(\d+\.\d{2})(?:\/|<)/g
+  const prices = []
+  while ((match = pricePattern.exec(html)) !== null) {
+    prices.push(parseFloat(match[1]))
+  }
+
+  // Match products with prices (first price per product)
+  const productList = [...seen.values()]
+  for (let i = 0; i < productList.length; i++) {
+    const p = productList[i]
+    const price = prices[i] || null
+    if (price && price > 0) {
+      products.push({
+        name: p.name,
+        price,
+        image: `https://dm.apac.cms.aldi.cx/is/image/aldiprodapac/product/jpg/scaleWidth/306/${p.uuid}/${encodeURIComponent(p.name)}`,
+        productId: `aldi_${p.name.replace(/[^a-z0-9]/gi, '_').slice(0, 50)}`,
+      })
+    }
+  }
+  return products
+}
+
+async function scrapeCategory(url) {
+  let allProducts = []
+  let page = 1
+  while (true) {
+    const pageUrl = `https://www.aldi.com.au${url}${page > 1 ? '?page=' + page : ''}`
+    const res = await fetch(pageUrl, { headers: { 'User-Agent': UA } })
+    if (!res.ok) break
+    const html = await res.text()
+    const products = extractProducts(html)
+    if (products.length === 0) break
+    allProducts.push(...products)
+    page++
+    await new Promise(r => setTimeout(r, 500)) // 500ms between pages
+  }
+  return allProducts
+}
+
+async function main() {
+  console.log('Starting Aldi scrape (fast HTML mode)...\n')
   let allProducts = []
   let allPrices = []
 
-  for (const cat of ALDI_CATEGORIES) {
-    try {
-      console.log(`  ${cat.name}...`)
-      let page_num = 1
-      let catTotal = 0
-      
-      while (true) {
-        const url = `https://www.aldi.com.au${cat.url}${page_num > 1 ? '?page=' + page_num : ''}`
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
-        await page.waitForSelector('.product-tile', { timeout: 15000 }).catch(() => {})
-        await page.waitForTimeout(3000)
-
-        const products = await page.evaluate(() => {
-          const items = []
-          const tiles = document.querySelectorAll('.product-tile')
-          tiles.forEach(tile => {
-            const text = tile.innerText || ''
-            const lines = text.split('\n').filter(l => l.trim())
-            const name = lines[0]?.trim() || ''
-            const priceEl = tile.querySelector('.base-price__regular')
-            const priceText = priceEl?.textContent?.trim() || ''
-            const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || null
-            const img = tile.querySelector('img')?.src || ''
-            if (name && price && price > 0 && name.length > 2) {
-              items.push({ name, price, img, sku: name.replace(/[^a-z0-9]/gi, '_').slice(0, 50) })
-            }
-          })
-          return items
-        })
-
-        if (products.length === 0) break
-
-        for (const p of products) {
-          const productId = `aldi_${p.sku}`
-          allProducts.push({
-            store: 'aldi', product_id: productId, name: p.name,
-            brand: null, size: null, category: cat.name, image: p.img || null,
-          })
-          allPrices.push({
-            store: 'aldi', product_id: productId, price: p.price,
-            was_price: null, is_on_special: false, cup_price: null,
-          })
-        }
-
-        catTotal += products.length
-        page_num++
-        await new Promise(r => setTimeout(r, 3000))
-      }
-      
-      console.log(`    → ${catTotal} products (${page_num - 1} pages)`)
-    } catch (e) {
-      console.log(`    → ERROR: ${e.message.slice(0, 50)}`)
+  for (const catUrl of ALDI_CATEGORIES) {
+    const catName = catUrl.split('/').slice(-2, -1)[0] || catUrl.split('/')[2]
+    process.stdout.write(`  ${catName}... `)
+    const products = await scrapeCategory(catUrl)
+    
+    for (const p of products) {
+      allProducts.push({ store: 'aldi', product_id: p.productId, name: p.name, brand: null, size: null, category: catName, image: p.image })
+      allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: null, is_on_special: false, cup_price: null })
     }
-    await new Promise(r => setTimeout(r, 5000))
+    console.log(`${products.length} products`)
+    await new Promise(r => setTimeout(r, 1000)) // 1s between categories
   }
 
-  await browser.close()
-
-  // Push to Supabase
-  console.log(`\nPushing ${allProducts.length} products to Supabase...`)
+  console.log(`\nTotal: ${allProducts.length} products`)
 
   // Upsert products
-  for (let i = 0; i < allProducts.length; i += 100) {
+  console.log('Saving to Supabase...')
+  for (let i = 0; i < allProducts.length; i += 200) {
     await fetch(`${SUPABASE_URL}/rest/v1/products?on_conflict=store,product_id`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: 'resolution=merge-duplicates' },
-      body: JSON.stringify(allProducts.slice(i, i + 100)),
+      body: JSON.stringify(allProducts.slice(i, i + 200)),
     })
   }
 
-  // CamelCamelCamel technique: only store price changes
-  // Fetch last known prices
-  const productIds = allPrices.map(p => p.product_id).join(',')
-  const lastRes = await fetch(`${SUPABASE_URL}/rest/v1/price_history?store=eq.aldi&product_id=in.(${productIds})&order=scraped_at.desc&select=product_id,price`, {
+  // CamelCamelCamel technique: check last prices
+  const ids = allPrices.map(p => p.product_id).join(',')
+  const lastRes = await fetch(`${SUPABASE_URL}/rest/v1/price_history?store=eq.aldi&product_id=in.(${ids})&order=scraped_at.desc&select=product_id,price`, {
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
   })
   const lastPrices = {}
-  if (lastRes.ok) {
-    for (const row of await lastRes.json()) {
-      if (!lastPrices[row.product_id]) lastPrices[row.product_id] = row.price
-    }
-  }
+  if (lastRes.ok) { for (const row of await lastRes.json()) { if (!lastPrices[row.product_id]) lastPrices[row.product_id] = row.price } }
 
-  // Filter: only insert if price changed or product is new
-  const changedPrices = allPrices.filter(p => {
+  const changed = allPrices.filter(p => {
     const last = lastPrices[p.product_id]
     return last === undefined || parseFloat(last) !== parseFloat(p.price)
   })
 
-  console.log(`Price changes: ${changedPrices.length} of ${allPrices.length} products`)
-
-  for (let i = 0; i < changedPrices.length; i += 100) {
-    await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: 'resolution=ignore-duplicates' },
-      body: JSON.stringify(changedPrices.slice(i, i + 100)),
-    })
+  if (changed.length > 0) {
+    for (let i = 0; i < changed.length; i += 200) {
+      await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: 'resolution=ignore-duplicates' },
+        body: JSON.stringify(changed.slice(i, i + 200)),
+      })
+    }
   }
 
-  console.log(`Done! ${allProducts.length} products scraped, ${changedPrices.length} price changes stored.`)
+  console.log(`Done! ${allProducts.length} products, ${changed.length} price changes stored.`)
 }
 
-scrapeAldi().catch(e => { console.error('Scrape failed:', e.message); process.exit(1) })
+main().catch(e => { console.error('FAILED:', e.message); process.exit(1) })
