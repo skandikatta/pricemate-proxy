@@ -47,46 +47,19 @@ async function scrapeAldi() {
       // Extract products from rendered page
       const products = await page.evaluate(() => {
         const items = []
-        // Try multiple selector strategies for Aldi's Vue-rendered products
-        const selectors = [
-          '[data-testid="product-tile"]',
-          '.product-tile',
-          '[class*="ProductTile"]',
-          '[class*="product-card"]',
-          '[class*="productTile"]',
-          'article[class*="product"]',
-          '[class*="plp-product"]',
-        ]
-        let tiles = []
-        for (const sel of selectors) {
-          tiles = document.querySelectorAll(sel)
-          if (tiles.length > 0) break
-        }
-        
-        // If no tiles found, try getting all links with prices
-        if (tiles.length === 0) {
-          // Look for price elements and work backwards to find product containers
-          const priceEls = document.querySelectorAll('[class*="price"], [class*="Price"]')
-          priceEls.forEach(el => {
-            const container = el.closest('a, li, div[class*="product"], div[class*="tile"]')
-            if (container && !tiles.length) tiles = [container, ...tiles]
-          })
-        }
-
+        const tiles = document.querySelectorAll('.product-tile')
         tiles.forEach(tile => {
-          const name = (tile.querySelector('[class*="title"], [class*="name"], [class*="Name"], h3, h4, h2') || 
-                       tile.querySelector('a[title]'))?.textContent?.trim() ||
-                       tile.querySelector('a')?.getAttribute('title') || ''
-          const priceText = (tile.querySelector('[class*="price"], [class*="Price"]'))?.textContent?.trim() || ''
-          const price = priceText ? parseFloat(priceText.replace(/[^0-9.]/g, '')) : null
+          const text = tile.innerText || ''
+          const lines = text.split('\n').filter(l => l.trim())
+          const name = lines[0]?.trim() || ''
+          const priceEl = tile.querySelector('.base-price__regular')
+          const priceText = priceEl?.textContent?.trim() || ''
+          const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || null
           const img = tile.querySelector('img')?.src || ''
-          const sku = tile.getAttribute('data-sku') || tile.getAttribute('data-product-id') || 
-                     tile.querySelector('a')?.href?.match(/\/(\d+)/)?.[1] || ''
-          if (name && price && price > 0) {
-            items.push({ name, price, img, sku })
+          if (name && price && price > 0 && name.length > 2) {
+            items.push({ name, price, img, sku: name.replace(/[^a-z0-9]/gi, '_').slice(0, 50) })
           }
         })
-        
         return items
       })
 
