@@ -5,7 +5,7 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
 
 const ALDI_CATEGORIES = [
   { url: '/products/fruits-vegetables/fresh-fruits/k/1111111152', name: 'fruit' },
-  { url: '/products/fruits-vegetables/fresh-vegetables/k/1111111153', name: 'vegetables' },
+  { url: '/products/fruits-vegetables/fresh-vegetables/k/950000002', name: 'vegetables' },
   { url: '/products/dairy-eggs-fridge/milk/k/950000003', name: 'milk' },
   { url: '/products/dairy-eggs-fridge/cheese/k/950000004', name: 'cheese' },
   { url: '/products/dairy-eggs-fridge/yoghurt/k/950000005', name: 'yoghurt' },
