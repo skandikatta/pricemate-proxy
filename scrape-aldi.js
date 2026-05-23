@@ -90,7 +90,7 @@ async function main() {
   let allPrices = []
 
   for (const catUrl of ALDI_CATEGORIES) {
-    const catName = catUrl.split('/').slice(-2, -1)[0] || catUrl.split('/')[2]
+    const catName = catUrl.split('/')[2] || 'unknown'
     process.stdout.write(`  ${catName}... `)
     const products = await scrapeCategory(catUrl)
     
