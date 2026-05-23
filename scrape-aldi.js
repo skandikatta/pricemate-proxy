@@ -39,46 +39,56 @@ async function scrapeAldi() {
   for (const cat of ALDI_CATEGORIES) {
     try {
       console.log(`  ${cat.name}...`)
-      await page.goto(`https://www.aldi.com.au${cat.url}`, { waitUntil: 'domcontentloaded', timeout: 60000 })
-      // Wait for products to render (Vue SPA needs time)
-      await page.waitForSelector('[class*="product"], [data-testid*="product"], .product-tile', { timeout: 15000 }).catch(() => {})
-      await page.waitForTimeout(3000)
+      let page_num = 1
+      let catTotal = 0
+      
+      while (true) {
+        const url = `https://www.aldi.com.au${cat.url}${page_num > 1 ? '?page=' + page_num : ''}`
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+        await page.waitForSelector('.product-tile', { timeout: 15000 }).catch(() => {})
+        await page.waitForTimeout(3000)
 
-      // Extract products from rendered page
-      const products = await page.evaluate(() => {
-        const items = []
-        const tiles = document.querySelectorAll('.product-tile')
-        tiles.forEach(tile => {
-          const text = tile.innerText || ''
-          const lines = text.split('\n').filter(l => l.trim())
-          const name = lines[0]?.trim() || ''
-          const priceEl = tile.querySelector('.base-price__regular')
-          const priceText = priceEl?.textContent?.trim() || ''
-          const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || null
-          const img = tile.querySelector('img')?.src || ''
-          if (name && price && price > 0 && name.length > 2) {
-            items.push({ name, price, img, sku: name.replace(/[^a-z0-9]/gi, '_').slice(0, 50) })
-          }
+        const products = await page.evaluate(() => {
+          const items = []
+          const tiles = document.querySelectorAll('.product-tile')
+          tiles.forEach(tile => {
+            const text = tile.innerText || ''
+            const lines = text.split('\n').filter(l => l.trim())
+            const name = lines[0]?.trim() || ''
+            const priceEl = tile.querySelector('.base-price__regular')
+            const priceText = priceEl?.textContent?.trim() || ''
+            const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || null
+            const img = tile.querySelector('img')?.src || ''
+            if (name && price && price > 0 && name.length > 2) {
+              items.push({ name, price, img, sku: name.replace(/[^a-z0-9]/gi, '_').slice(0, 50) })
+            }
+          })
+          return items
         })
-        return items
-      })
 
-      for (const p of products) {
-        const productId = p.sku || p.name.replace(/[^a-z0-9]/gi, '_').slice(0, 50)
-        allProducts.push({
-          store: 'aldi', product_id: `aldi_${productId}`, name: p.name,
-          brand: null, size: null, category: cat.name, image: p.img || null,
-        })
-        allPrices.push({
-          store: 'aldi', product_id: `aldi_${productId}`, price: p.price,
-          was_price: null, is_on_special: false, cup_price: null,
-        })
+        if (products.length === 0) break
+
+        for (const p of products) {
+          const productId = `aldi_${p.sku}`
+          allProducts.push({
+            store: 'aldi', product_id: productId, name: p.name,
+            brand: null, size: null, category: cat.name, image: p.img || null,
+          })
+          allPrices.push({
+            store: 'aldi', product_id: productId, price: p.price,
+            was_price: null, is_on_special: false, cup_price: null,
+          })
+        }
+
+        catTotal += products.length
+        page_num++
+        await new Promise(r => setTimeout(r, 3000))
       }
-      console.log(`    → ${products.length} products`)
+      
+      console.log(`    → ${catTotal} products (${page_num - 1} pages)`)
     } catch (e) {
       console.log(`    → ERROR: ${e.message.slice(0, 50)}`)
     }
-    // Wait between categories to avoid rate limiting
     await new Promise(r => setTimeout(r, 5000))
   }
 
