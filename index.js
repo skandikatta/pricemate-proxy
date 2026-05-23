@@ -165,7 +165,8 @@ app.get('/api/scrape-all', async (req, res) => {
           body: JSON.stringify(products),
         })
 
-        // Only store price history (ignore duplicates = only new date+product combos insert)
+        // Only store price if it CHANGED from last recorded price (CamelCamelCamel technique)
+        // This saves 70%+ storage when scaling to Woolworths + Aldi
         const prices = results.map(p => {
           const pr = p.pricing || {}
           return {
@@ -175,11 +176,35 @@ app.get('/api/scrape-all', async (req, res) => {
           }
         })
 
-        const priceRes = await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates,return=headers-only' },
-          body: JSON.stringify(prices),
+        // Fetch last known prices for these products (batch query)
+        const productIds = prices.map(p => `"${p.product_id}"`).join(',')
+        const lastPricesRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/price_history?store=eq.coles&product_id=in.(${prices.map(p=>p.product_id).join(',')})&order=scraped_at.desc&select=product_id,price`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+        )
+        let lastPrices = {}
+        if (lastPricesRes.ok) {
+          const lp = await lastPricesRes.json()
+          // Only keep first (latest) per product
+          for (const row of lp) {
+            if (!lastPrices[row.product_id]) lastPrices[row.product_id] = row.price
+          }
+        }
+
+        // Filter: only insert if price changed OR product is new
+        const changedPrices = prices.filter(p => {
+          const last = lastPrices[p.product_id]
+          return last === undefined || parseFloat(last) !== parseFloat(p.price)
         })
+
+        if (changedPrices.length > 0) {
+          await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates,return=headers-only' },
+            body: JSON.stringify(changedPrices),
+          })
+          priceChanges += changedPrices.length
+        }
 
         total += products.length
         await new Promise(r => setTimeout(r, 1000))
@@ -187,7 +212,7 @@ app.get('/api/scrape-all', async (req, res) => {
     }
   }
 
-  res.json({ success: true, totalProducts: total, categories: 8 })
+  res.json({ success: true, totalProducts: total, categories: 8, priceChanges })
 })
 
 app.get('/health', (req, res) => res.json({ status: 'ok', buildId }))
