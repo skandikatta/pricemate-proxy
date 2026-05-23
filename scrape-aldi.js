@@ -9,16 +9,24 @@ const ALDI_CATEGORIES = [
   { url: '/products/dairy-eggs-fridge/milk/k/950000003', name: 'milk' },
   { url: '/products/dairy-eggs-fridge/cheese/k/950000004', name: 'cheese' },
   { url: '/products/dairy-eggs-fridge/yoghurt/k/950000005', name: 'yoghurt' },
+  { url: '/products/dairy-eggs-fridge/eggs/k/950000006', name: 'eggs' },
   { url: '/products/pantry/canned-food/k/950000020', name: 'canned' },
   { url: '/products/pantry/pasta-rice-grains/k/950000024', name: 'pasta-rice' },
   { url: '/products/pantry/cereals-muesli/k/950000025', name: 'cereal' },
   { url: '/products/pantry/chips-corn-chips-other/k/950000027', name: 'snacks' },
+  { url: '/products/pantry/confectionery/k/950000026', name: 'confectionery' },
+  { url: '/products/pantry/sauces/k/950000021', name: 'sauces' },
   { url: '/products/drinks/soft-drinks/k/950000041', name: 'soft-drinks' },
   { url: '/products/drinks/juice/k/950000042', name: 'juice' },
+  { url: '/products/drinks/water/k/950000043', name: 'water' },
   { url: '/products/meat-seafood/chicken/k/950000010', name: 'chicken' },
   { url: '/products/meat-seafood/beef/k/950000011', name: 'beef' },
+  { url: '/products/meat-seafood/pork/k/950000012', name: 'pork' },
   { url: '/products/frozen/frozen-pizzas/k/950000037', name: 'frozen-pizza' },
+  { url: '/products/frozen/frozen-fruit-vegetables/k/950000034', name: 'frozen-veg' },
   { url: '/products/bakery/bread/k/950000015', name: 'bread' },
+  { url: '/products/household/cleaning/k/950000050', name: 'cleaning' },
+  { url: '/products/household/laundry/k/950000051', name: 'laundry' },
 ]
 
 async function scrapeAldi() {
@@ -31,8 +39,8 @@ async function scrapeAldi() {
   for (const cat of ALDI_CATEGORIES) {
     try {
       console.log(`  ${cat.name}...`)
-      await page.goto(`https://www.aldi.com.au${cat.url}`, { waitUntil: 'networkidle', timeout: 30000 })
-      await page.waitForTimeout(2000)
+      await page.goto(`https://www.aldi.com.au${cat.url}`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+      await page.waitForTimeout(5000)
 
       // Extract products from rendered page
       const products = await page.evaluate(() => {
@@ -78,6 +86,8 @@ async function scrapeAldi() {
     } catch (e) {
       console.log(`    → ERROR: ${e.message.slice(0, 50)}`)
     }
+    // Wait between categories to avoid rate limiting
+    await new Promise(r => setTimeout(r, 5000))
   }
 
   await browser.close()
