@@ -9,5 +9,9 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger scrape
-        run: curl -s -m 600 "https://pricemate-proxy.onrender.com/api/scrape-all"
+      - name: Wake up Render
+        run: curl -s -m 60 "https://pricemate-proxy.onrender.com/health" || true
+      - name: Wait for Render to be ready
+        run: sleep 10
+      - name: Scrape all stores
+        run: curl -s -m 900 "https://pricemate-proxy.onrender.com/api/scrape-all" || echo "Timeout but scrape may still be running"
