@@ -138,11 +138,11 @@ app.get('/api/scrape', async (req, res) => {
 app.get('/api/scrape-all', async (req, res) => {
   if (!SUPABASE_KEY) return res.json({ error: 'SUPABASE_KEY not set' })
   const categories = ['dairy-eggs-fridge', 'fruit-vegetables', 'meat-seafood', 'pantry', 'drinks', 'frozen', 'bakery', 'household']
-  const pages = parseInt(req.query.pages) || 3
-  let total = 0
+  const maxPages = parseInt(req.query.pages) || 999
+  let total = 0, priceChanges = 0
 
   for (const cat of categories) {
-    for (let page = 1; page <= pages; page++) {
+    for (let page = 1; page <= maxPages; page++) {
       try {
         const id = await getBuildId()
         const url = `${COLES_BASE}/_next/data/${id}/en/browse/${cat}.json?slug=${cat}&page=${page}`
@@ -152,12 +152,20 @@ app.get('/api/scrape-all', async (req, res) => {
         const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
         if (results.length === 0) break
 
+        // Upsert all products (always)
         const products = results.map(p => ({
           store: 'coles', product_id: String(p.id), name: p.name,
           brand: p.brand || null, size: p.size || null, category: cat,
           image: p.imageUris?.[0]?.uri ? IMG_BASE + p.imageUris[0].uri : null,
         }))
 
+        await fetch(`${SUPABASE_URL}/rest/v1/products?on_conflict=store,product_id`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=merge-duplicates' },
+          body: JSON.stringify(products),
+        })
+
+        // Only store price history (ignore duplicates = only new date+product combos insert)
         const prices = results.map(p => {
           const pr = p.pricing || {}
           return {
@@ -167,25 +175,19 @@ app.get('/api/scrape-all', async (req, res) => {
           }
         })
 
-        if (products.length > 0) {
-          await fetch(`${SUPABASE_URL}/rest/v1/products?on_conflict=store,product_id`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates' },
-            body: JSON.stringify(products),
-          })
-          await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates' },
-            body: JSON.stringify(prices),
-          })
-        }
+        const priceRes = await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates,return=headers-only' },
+          body: JSON.stringify(prices),
+        })
+
         total += products.length
         await new Promise(r => setTimeout(r, 1000))
       } catch (e) { break }
     }
   }
 
-  res.json({ success: true, totalProducts: total, categories: 8, pagesPerCategory: pages })
+  res.json({ success: true, totalProducts: total, categories: 8 })
 })
 
 app.get('/health', (req, res) => res.json({ status: 'ok', buildId }))
