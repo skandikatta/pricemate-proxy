@@ -138,51 +138,54 @@ app.get('/api/scrape', async (req, res) => {
 app.get('/api/scrape-all', async (req, res) => {
   if (!SUPABASE_KEY) return res.json({ error: 'SUPABASE_KEY not set' })
   const categories = ['dairy-eggs-fridge', 'fruit-vegetables', 'meat-seafood', 'pantry', 'drinks', 'frozen', 'bakery', 'household']
+  const pages = parseInt(req.query.pages) || 3
   let total = 0
 
   for (const cat of categories) {
-    try {
-      const id = await getBuildId()
-      const url = `${COLES_BASE}/_next/data/${id}/en/browse/${cat}.json?slug=${cat}&page=1`
-      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
-      if (!r.ok) continue
-      const data = await r.json()
-      const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
+    for (let page = 1; page <= pages; page++) {
+      try {
+        const id = await getBuildId()
+        const url = `${COLES_BASE}/_next/data/${id}/en/browse/${cat}.json?slug=${cat}&page=${page}`
+        const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
+        if (!r.ok) break
+        const data = await r.json()
+        const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
+        if (results.length === 0) break
 
-      const products = results.map(p => ({
-        store: 'coles', product_id: String(p.id), name: p.name,
-        brand: p.brand || null, size: p.size || null, category: cat,
-        image: p.imageUris?.[0]?.uri ? IMG_BASE + p.imageUris[0].uri : null,
-      }))
+        const products = results.map(p => ({
+          store: 'coles', product_id: String(p.id), name: p.name,
+          brand: p.brand || null, size: p.size || null, category: cat,
+          image: p.imageUris?.[0]?.uri ? IMG_BASE + p.imageUris[0].uri : null,
+        }))
 
-      const prices = results.map(p => {
-        const pr = p.pricing || {}
-        return {
-          store: 'coles', product_id: String(p.id), price: pr.now || 0,
-          was_price: pr.was || null, is_on_special: pr.onlineSpecial || false,
-          cup_price: pr.comparable || null,
+        const prices = results.map(p => {
+          const pr = p.pricing || {}
+          return {
+            store: 'coles', product_id: String(p.id), price: pr.now || 0,
+            was_price: pr.was || null, is_on_special: pr.onlineSpecial || false,
+            cup_price: pr.comparable || null,
+          }
+        })
+
+        if (products.length > 0) {
+          await fetch(`${SUPABASE_URL}/rest/v1/products?on_conflict=store,product_id`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates' },
+            body: JSON.stringify(products),
+          })
+          await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=ignore-duplicates' },
+            body: JSON.stringify(prices),
+          })
         }
-      })
-
-      if (products.length > 0) {
-        await fetch(`${SUPABASE_URL}/rest/v1/products`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=merge-duplicates' },
-          body: JSON.stringify(products),
-        })
-        await fetch(`${SUPABASE_URL}/rest/v1/price_history`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'resolution=merge-duplicates' },
-          body: JSON.stringify(prices),
-        })
-      }
-      total += products.length
-      // Rate limit: wait 1 sec between categories
-      await new Promise(r => setTimeout(r, 1000))
-    } catch (e) { continue }
+        total += products.length
+        await new Promise(r => setTimeout(r, 1000))
+      } catch (e) { break }
+    }
   }
 
-  res.json({ success: true, totalProducts: total, categories: 8 })
+  res.json({ success: true, totalProducts: total, categories: 8, pagesPerCategory: pages })
 })
 
 app.get('/health', (req, res) => res.json({ status: 'ok', buildId }))
