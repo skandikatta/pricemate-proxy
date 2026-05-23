@@ -123,16 +123,36 @@ async function scrapeAldi() {
     })
   }
 
-  // Insert prices (CamelCamelCamel technique - ignore duplicates for same day)
-  for (let i = 0; i < allPrices.length; i += 100) {
+  // CamelCamelCamel technique: only store price changes
+  // Fetch last known prices
+  const productIds = allPrices.map(p => p.product_id).join(',')
+  const lastRes = await fetch(`${SUPABASE_URL}/rest/v1/price_history?store=eq.aldi&product_id=in.(${productIds})&order=scraped_at.desc&select=product_id,price`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  })
+  const lastPrices = {}
+  if (lastRes.ok) {
+    for (const row of await lastRes.json()) {
+      if (!lastPrices[row.product_id]) lastPrices[row.product_id] = row.price
+    }
+  }
+
+  // Filter: only insert if price changed or product is new
+  const changedPrices = allPrices.filter(p => {
+    const last = lastPrices[p.product_id]
+    return last === undefined || parseFloat(last) !== parseFloat(p.price)
+  })
+
+  console.log(`Price changes: ${changedPrices.length} of ${allPrices.length} products`)
+
+  for (let i = 0; i < changedPrices.length; i += 100) {
     await fetch(`${SUPABASE_URL}/rest/v1/price_history?on_conflict=store,product_id,scraped_at`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: 'resolution=ignore-duplicates' },
-      body: JSON.stringify(allPrices.slice(i, i + 100)),
+      body: JSON.stringify(changedPrices.slice(i, i + 100)),
     })
   }
 
-  console.log(`Done! ${allProducts.length} Aldi products scraped and stored.`)
+  console.log(`Done! ${allProducts.length} products scraped, ${changedPrices.length} price changes stored.`)
 }
 
 scrapeAldi().catch(e => { console.error('Scrape failed:', e.message); process.exit(1) })
