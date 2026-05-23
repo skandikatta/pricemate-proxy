@@ -40,34 +40,53 @@ async function scrapeAldi() {
     try {
       console.log(`  ${cat.name}...`)
       await page.goto(`https://www.aldi.com.au${cat.url}`, { waitUntil: 'domcontentloaded', timeout: 60000 })
-      await page.waitForTimeout(5000)
+      // Wait for products to render (Vue SPA needs time)
+      await page.waitForSelector('[class*="product"], [data-testid*="product"], .product-tile', { timeout: 15000 }).catch(() => {})
+      await page.waitForTimeout(3000)
 
       // Extract products from rendered page
       const products = await page.evaluate(() => {
         const items = []
-        // Aldi uses product tiles with data attributes or structured elements
-        const tiles = document.querySelectorAll('[data-testid="product-tile"], .product-tile, [class*="product"]')
+        // Try multiple selector strategies for Aldi's Vue-rendered products
+        const selectors = [
+          '[data-testid="product-tile"]',
+          '.product-tile',
+          '[class*="ProductTile"]',
+          '[class*="product-card"]',
+          '[class*="productTile"]',
+          'article[class*="product"]',
+          '[class*="plp-product"]',
+        ]
+        let tiles = []
+        for (const sel of selectors) {
+          tiles = document.querySelectorAll(sel)
+          if (tiles.length > 0) break
+        }
+        
+        // If no tiles found, try getting all links with prices
+        if (tiles.length === 0) {
+          // Look for price elements and work backwards to find product containers
+          const priceEls = document.querySelectorAll('[class*="price"], [class*="Price"]')
+          priceEls.forEach(el => {
+            const container = el.closest('a, li, div[class*="product"], div[class*="tile"]')
+            if (container && !tiles.length) tiles = [container, ...tiles]
+          })
+        }
+
         tiles.forEach(tile => {
-          const name = tile.querySelector('[class*="title"], [class*="name"], h3, h4')?.textContent?.trim()
-          const priceEl = tile.querySelector('[class*="price"]')?.textContent?.trim()
-          const price = priceEl ? parseFloat(priceEl.replace(/[^0-9.]/g, '')) : null
+          const name = (tile.querySelector('[class*="title"], [class*="name"], [class*="Name"], h3, h4, h2') || 
+                       tile.querySelector('a[title]'))?.textContent?.trim() ||
+                       tile.querySelector('a')?.getAttribute('title') || ''
+          const priceText = (tile.querySelector('[class*="price"], [class*="Price"]'))?.textContent?.trim() || ''
+          const price = priceText ? parseFloat(priceText.replace(/[^0-9.]/g, '')) : null
           const img = tile.querySelector('img')?.src || ''
-          const sku = tile.getAttribute('data-sku') || tile.getAttribute('data-product-id') || ''
-          if (name && price) {
+          const sku = tile.getAttribute('data-sku') || tile.getAttribute('data-product-id') || 
+                     tile.querySelector('a')?.href?.match(/\/(\d+)/)?.[1] || ''
+          if (name && price && price > 0) {
             items.push({ name, price, img, sku })
           }
         })
-        // Fallback: look for any price + name pattern
-        if (items.length === 0) {
-          const allText = document.body.innerText
-          const matches = allText.match(/([A-Z][^\n]{3,50})\n\$([0-9]+\.[0-9]+)/g) || []
-          matches.forEach(m => {
-            const parts = m.split('\n')
-            if (parts.length >= 2) {
-              items.push({ name: parts[0].trim(), price: parseFloat(parts[1].replace('$', '')), img: '', sku: '' })
-            }
-          })
-        }
+        
         return items
       })
 
