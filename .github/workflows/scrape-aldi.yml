@@ -13,6 +13,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - run: npm install playwright
       - run: npx playwright install chromium
       - run: node scrape-aldi.js
         env:
