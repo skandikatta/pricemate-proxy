@@ -6,15 +6,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  scrape:
+  coles:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Wake up Render
-        run: curl -s -m 120 "https://pricemate-proxy.onrender.com/health" && echo " OK"
-      - name: Wait for ready
-        run: sleep 5
-      - name: Scrape all stores
-        run: |
-          result=$(curl -s -m 900 "https://pricemate-proxy.onrender.com/api/scrape-all")
-          echo "$result"
-          echo "$result" | grep -q "success" || exit 0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node scrape-coles.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+  woolworths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node scrape-woolworths.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
