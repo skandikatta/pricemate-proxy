@@ -137,6 +137,31 @@ app.get('/api/search', async (req, res) => {
   res.json({ products, query: q, total: products.length })
 })
 
+// Browse proxy - returns raw Coles/Woolworths category JSON (for GitHub Actions scrapers)
+app.get('/api/browse/coles', async (req, res) => {
+  try {
+    const cat = req.query.category || 'dairy-eggs-fridge'
+    const page = parseInt(req.query.page) || 1
+    const id = await getBuildId()
+    const url = `${COLES_BASE}/_next/data/${id}/en/browse/${cat}.json?slug=${cat}&page=${page}`
+    const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
+    if (!r.ok) return res.status(r.status).json({ error: 'Coles returned ' + r.status })
+    const data = await r.json()
+    res.json(data)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/browse/woolworths', async (req, res) => {
+  try {
+    const categoryId = req.query.categoryId
+    const page = parseInt(req.query.page) || 1
+    if (!categoryId) return res.status(400).json({ error: 'categoryId required' })
+    const data = await woolworthsBrowse(categoryId, page)
+    if (!data) return res.status(502).json({ error: 'No data from Woolworths' })
+    res.json(data)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // Daily scraper endpoint - scrapes a category and stores in Supabase
 app.get('/api/scrape', async (req, res) => {
   if (!SUPABASE_KEY) return res.json({ error: 'SUPABASE_KEY not set' })

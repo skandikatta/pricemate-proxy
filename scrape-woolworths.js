@@ -1,19 +1,9 @@
-const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
+const PROXY = process.env.PROXY_URL || 'https://pricemate-proxy.onrender.com'
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://asfnqfhpfufcbjzsrxlz.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
 
-async function getWoolworthsCookies() {
-  const res = await fetch(`${WOOLWORTHS_BASE}/shop/browse/fruit-veg`, { headers: { 'User-Agent': UA }, redirect: 'manual' })
-  const setCookies = res.headers.getSetCookie?.() || []
-  return setCookies.map(c => c.split(';')[0]).join('; ')
-}
-
 async function scrapeWoolworths() {
-  console.log('=== WOOLWORTHS ===')
-  const cookies = await getWoolworthsCookies()
-  if (!cookies) { console.log('Failed to get cookies, skipping'); process.exit(1) }
-
+  console.log('=== WOOLWORTHS (via Render proxy) ===')
   const departments = [
     { id: '1-E5BEE36E', name: 'fruit-veg' },
     { id: '1_DEB537E', name: 'bakery' },
@@ -27,21 +17,11 @@ async function scrapeWoolworths() {
 
   for (const dept of departments) {
     for (let page = 1; page <= 999; page++) {
-      const body = JSON.stringify({
-        categoryId: dept.id, pageNumber: page, pageSize: 36, sortType: 'TraderRelevance',
-        url: '/shop/browse/fruit-veg', location: '/shop/browse/fruit-veg',
-        formatObject: '{"name":"Category"}', isSpecial: false, isBundle: false,
-        isMobile: false, filters: [], token: '', gpBoost: 0,
-        isHideUnavailableProducts: false, isRegisteredRewardCardPromotion: false,
-        enableAdReRanking: false, groupEdmVariants: true, categoryVersion: 'v2'
-      })
-      const r = await fetch(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
-        method: 'POST',
-        headers: { 'User-Agent': UA, 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': cookies },
-        body
-      })
-      if (!r.ok) break
+      const url = `${PROXY}/api/browse/woolworths?categoryId=${dept.id}&page=${page}`
+      const r = await fetch(url)
+      if (!r.ok) { console.log(`  ${dept.name} p${page}: HTTP ${r.status}, stopping`); break }
       const data = await r.json()
+      if (data.error) { console.log(`  ${dept.name} p${page}: ${data.error}, stopping`); break }
       const bundles = data.Bundles || []
       if (bundles.length === 0) break
       const results = bundles.flatMap(b => b.Products || [])
@@ -70,7 +50,7 @@ async function scrapeWoolworths() {
       }
 
       total += products.length
-      await sleep(100)
+      await sleep(300)
     }
     console.log(`  ${dept.name}: ${total} total`)
   }
