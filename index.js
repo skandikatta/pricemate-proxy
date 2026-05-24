@@ -5,7 +5,7 @@ const PORT = process.env.PORT || 3001
 const COLES_BASE = 'https://www.coles.com.au'
 const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
 const IMG_BASE_COLES = 'https://productimages.coles.com.au/productimages'
-const IMG_BASE_WOOLWORTHS = 'https://cdn0.woolworths.media/content/wowproductimages/medium'
+const IMG_BASE_WOOLWORTHS = 'https://cdn0.woolworths.media/content/wowproductimages/large'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://asfnqfhpfufcbjzsrxlz.supabase.co'
@@ -94,7 +94,7 @@ function mapWoolworths(p) {
     name: p.Name || p.DisplayName, price: p.Price || 0, wasPrice: p.WasPrice || 0,
     isOnSpecial: p.IsOnSpecial || false, isHalfPrice: p.IsHalfPrice || false,
     savings: p.SavingsAmount || 0,
-    image: p.MediumImageFile || `${IMG_BASE_WOOLWORTHS}/${p.Stockcode}.jpg`,
+    image: p.LargeImageFile || p.MediumImageFile || `${IMG_BASE_WOOLWORTHS}/${p.Stockcode}.jpg`,
     cupPrice: p.CupString || '', brand: p.Brand || '', size: p.PackageSize || '',
     store: 'woolworths', productId: String(p.Stockcode || ''),
   }
