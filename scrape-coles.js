@@ -11,8 +11,9 @@ async function scrapeColes() {
   for (const cat of categories) {
     for (let page = 1; page <= 999; page++) {
       const url = `${PROXY}/api/browse/coles?category=${cat}&page=${page}`
+      process.stdout.write(`  ${cat} p${page}...`)
       const r = await fetch(url)
-      if (!r.ok) { console.log(`  ${cat} p${page}: HTTP ${r.status}, stopping`); break }
+      if (!r.ok) { console.log(` HTTP ${r.status}, stopping`); break }
       const data = await r.json()
       if (data.error) { console.log(`  ${cat} p${page}: ${data.error}, stopping`); break }
       const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
@@ -42,9 +43,10 @@ async function scrapeColes() {
       }
 
       total += products.length
+      console.log(` ${results.length} products (${changed.length} price changes)`)
       await sleep(1500)
     }
-    console.log(`  ${cat}: ${total} total`)
+    console.log(`  ✓ ${cat}: ${total} cumulative`)
   }
   console.log(`\nColes done: ${total} products, ${changes} price changes`)
 }

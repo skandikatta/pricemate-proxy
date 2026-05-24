@@ -18,8 +18,9 @@ async function scrapeWoolworths() {
   for (const dept of departments) {
     for (let page = 1; page <= 999; page++) {
       const url = `${PROXY}/api/browse/woolworths?categoryId=${dept.id}&page=${page}`
+      process.stdout.write(`  ${dept.name} p${page}...`)
       const r = await fetch(url)
-      if (!r.ok) { console.log(`  ${dept.name} p${page}: HTTP ${r.status}, stopping`); break }
+      if (!r.ok) { console.log(` HTTP ${r.status}, stopping`); break }
       const data = await r.json()
       if (data.error) { console.log(`  ${dept.name} p${page}: ${data.error}, stopping`); break }
       const bundles = data.Bundles || []
@@ -50,9 +51,10 @@ async function scrapeWoolworths() {
       }
 
       total += products.length
+      console.log(` ${results.length} products (${changed.length} price changes)`)
       await sleep(300)
     }
-    console.log(`  ${dept.name}: ${total} total`)
+    console.log(`  ✓ ${dept.name}: ${total} cumulative`)
   }
   console.log(`\nWoolworths done: ${total} products, ${changes} price changes`)
 }
