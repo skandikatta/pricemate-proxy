@@ -1,30 +1,20 @@
-const COLES_BASE = 'https://www.coles.com.au'
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
-const IMG_BASE_COLES = 'https://productimages.coles.com.au/productimages'
+const PROXY = process.env.PROXY_URL || 'https://pricemate-proxy.onrender.com'
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://asfnqfhpfufcbjzsrxlz.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
-
-async function getColesBuildId() {
-  const res = await fetch(COLES_BASE, { headers: { 'User-Agent': UA } })
-  const html = await res.text()
-  const match = html.match(/"buildId":"([^"]+)"/)
-  if (!match) throw new Error('Cannot extract Coles buildId')
-  return match[1]
-}
+const IMG_BASE_COLES = 'https://productimages.coles.com.au/productimages'
 
 async function scrapeColes() {
-  console.log('=== COLES ===')
-  const buildId = await getColesBuildId()
-  console.log(`BuildId: ${buildId}`)
+  console.log('=== COLES (via Render proxy) ===')
   const categories = ['dairy-eggs-fridge', 'fruit-vegetables', 'meat-seafood', 'pantry', 'drinks', 'frozen', 'bakery', 'household']
   let total = 0, changes = 0
 
   for (const cat of categories) {
     for (let page = 1; page <= 999; page++) {
-      const url = `${COLES_BASE}/_next/data/${buildId}/en/browse/${cat}.json?slug=${cat}&page=${page}`
-      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
-      if (!r.ok) break
+      const url = `${PROXY}/api/browse/coles?category=${cat}&page=${page}`
+      const r = await fetch(url)
+      if (!r.ok) { console.log(`  ${cat} p${page}: HTTP ${r.status}, stopping`); break }
       const data = await r.json()
+      if (data.error) { console.log(`  ${cat} p${page}: ${data.error}, stopping`); break }
       const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
       if (results.length === 0) break
 
@@ -52,7 +42,7 @@ async function scrapeColes() {
       }
 
       total += products.length
-      await sleep(1000)
+      await sleep(1500)
     }
     console.log(`  ${cat}: ${total} total`)
   }
