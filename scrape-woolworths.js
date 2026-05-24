@@ -47,6 +47,7 @@ async function scrapeWoolworths() {
       const bundles = data.Bundles || []
       if (bundles.length === 0) { console.log(' empty, done'); break }
       const results = bundles.flatMap(b => b.Products || [])
+      if (results.length < 10) { console.log(` only ${results.length} (filler), done`); break }
 
       const products = results.map(p => ({
         store: 'woolworths', product_id: String(p.Stockcode), name: p.Name || p.DisplayName,
