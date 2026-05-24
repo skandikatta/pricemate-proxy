@@ -15,7 +15,12 @@ jobs:
         with:
           node-version: "20"
       - name: Wake Render proxy
-        run: curl -s -m 120 "https://pricemate-proxy.onrender.com/health" && echo " OK"
+        run: |
+          for i in 1 2 3; do
+            curl -s -m 120 "https://pricemate-proxy.onrender.com/health" && break
+            echo "Attempt $i failed, waiting 30s..."
+            sleep 30
+          done
       - run: node scrape-coles.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
