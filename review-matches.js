@@ -12,9 +12,9 @@ const { Pool } = require('pg')
 const readline = require('readline')
 
 const pool = new Pool({
-  host: process.env.DB_HOST || '192.9.191.233', port: 5432,
+  host: process.env.DB_HOST, port: 5432,
   database: 'pricemate', user: 'pricemate',
-  password: process.env.DB_PASSWORD || 'pm_oracle_2026!',
+  password: process.env.DB_PASSWORD,
 })
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
