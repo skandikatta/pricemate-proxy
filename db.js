@@ -2,11 +2,11 @@
 const { Pool } = require('pg')
 
 const pool = new Pool({
-  host: process.env.DB_HOST || 'REDACTED_HOST',
+  host: process.env.DB_HOST,
   port: 5432,
   database: 'pricemate',
   user: 'pricemate',
-  password: process.env.DB_PASSWORD || 'REDACTED_PASSWORD',
+  password: process.env.DB_PASSWORD,
   max: 5,
   idleTimeoutMillis: 30000,
 })
