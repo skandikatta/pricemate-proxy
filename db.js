@@ -88,13 +88,13 @@ async function upsertProducts(products) {
   })
 
   const values = deduped.map((p, i) => {
-    const base = i * 7
-    return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7})`
+    const base = i * 8
+    return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`
   }).join(',')
-  const params = deduped.flatMap(p => [p.store, p.product_id, p.name, p.brand || null, p.size || null, p.category || null, p.image || null])
+  const params = deduped.flatMap(p => [p.store, p.product_id, p.name, p.brand || null, p.size || null, p.category || null, p.image || null, p.barcode || null])
   await pool.query(
-    `INSERT INTO products (store,product_id,name,brand,size,category,image) VALUES ${values}
-     ON CONFLICT (store,product_id) DO UPDATE SET name=EXCLUDED.name, brand=EXCLUDED.brand, size=EXCLUDED.size, category=EXCLUDED.category, image=EXCLUDED.image`,
+    `INSERT INTO products (store,product_id,name,brand,size,category,image,barcode) VALUES ${values}
+     ON CONFLICT (store,product_id) DO UPDATE SET name=EXCLUDED.name, brand=EXCLUDED.brand, size=EXCLUDED.size, category=EXCLUDED.category, image=EXCLUDED.image, barcode=COALESCE(EXCLUDED.barcode, products.barcode)`,
     params
   )
 }

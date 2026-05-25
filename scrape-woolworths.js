@@ -63,6 +63,7 @@ async function scrapeWoolworths() {
           store: 'woolworths', product_id: String(p.Stockcode), name: p.Name || p.DisplayName,
           brand: p.Brand || null, size: p.PackageSize || null, category: dept.name,
           image: p.LargeImageFile || p.MediumImageFile || null,
+          barcode: p.Barcode || null,
         }))
 
         const prices = results.map(p => ({
