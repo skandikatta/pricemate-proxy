@@ -1,0 +1,285 @@
+// match-products.js — 4-layer aggressive product matcher
+// Matches same products across Coles, Woolworths, Aldi
+// Run: node match-products.js
+
+const { Pool } = require('pg')
+const pool = new Pool({
+  host: process.env.DB_HOST || 'REDACTED_HOST', port: 5432,
+  database: 'pricemate', user: 'pricemate',
+  password: process.env.DB_PASSWORD || 'REDACTED_PASSWORD',
+})
+
+// --- House brand equivalents (Aldi house brands → what they actually are) ---
+const HOUSE_BRANDS = {
+  // Aldi brands → generic category
+  'farmdale': 'milk', 'cowbelle': 'dairy', 'remano': 'pasta',
+  'belmont': 'biscuits', 'brooklea': 'yoghurt', 'westacre': 'dairy',
+  'lyttos': 'greek', 'monarc': 'pantry', 'beautifully butterfully': 'butter',
+  'baker life': 'bread', 'berg': 'smallgoods', 'brannans': 'butchery',
+  'cattleman': 'beef', 'colway': 'cheese', 'forresters': 'pie',
+  'golden crumpets': 'crumpets', 'jindurra': 'grain', 'just organic': 'organic',
+  'kindling': 'coffee', 'lacura': 'skincare', 'mamia': 'baby',
+  'milfina': 'chocolate', 'nature\'s nectar': 'juice', 'ocean rise': 'seafood',
+  'penfield': 'olives', 'radiance': 'vitamins', 'sakata': 'crackers',
+  'so natural': 'milk', 'urban eats': 'meals', 'westcliff': 'tea',
+}
+
+// Known cross-store brand equivalents
+const BRAND_EQUIVALENTS = [
+  ['coles', 'woolworths essentials', 'aldi'],  // store brands
+  ['coles finest', 'woolworths gold', 'aldi'],
+  ['coles simply', 'woolworths macro', 'just organic'],
+]
+
+function normalize(name) {
+  return (name || '').toLowerCase()
+    .replace(/[''""&]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b(each|loose|approx|per kg|kg|g|ml|l|pk|pack)\b/gi, m => m) // keep units
+    .trim()
+}
+
+function extractSize(name, sizeField) {
+  // Try size field first
+  if (sizeField) return sizeField.toLowerCase().replace(/\s+/g, '')
+  // Extract from name: "2L", "500g", "6 Pack", "1kg"
+  const m = name.match(/(\d+\.?\d*)\s*(kg|g|ml|l|litre|liter|pack|pk)\b/i)
+  return m ? (m[1] + m[2]).toLowerCase() : ''
+}
+
+function extractCoreName(name, brand) {
+  let n = normalize(name)
+  // Remove brand from name
+  if (brand) n = n.replace(normalize(brand), '').trim()
+  // Remove size info
+  n = n.replace(/\d+\.?\d*\s*(kg|g|ml|l|litre|liter|pack|pk)\b/gi, '').trim()
+  // Remove common filler words
+  n = n.replace(/\b(the|a|an|of|with|and|in|for|from)\b/g, '').replace(/\s+/g, ' ').trim()
+  return n
+}
+
+function tokenize(str) {
+  return str.toLowerCase().split(/\s+/).filter(w => w.length > 2)
+}
+
+function tokenOverlap(a, b) {
+  const ta = new Set(tokenize(a))
+  const tb = new Set(tokenize(b))
+  if (ta.size === 0 || tb.size === 0) return 0
+  const intersection = [...ta].filter(t => tb.has(t)).length
+  return intersection / Math.min(ta.size, tb.size)
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length
+  if (m === 0) return n
+  if (n === 0) return m
+  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)])
+  for (let j = 1; j <= n; j++) d[0][j] = j
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      d[i][j] = a[i-1] === b[j-1] ? d[i-1][j-1] : 1 + Math.min(d[i-1][j], d[i][j-1], d[i-1][j-1])
+  return d[m][n]
+}
+
+async function loadProducts() {
+  const { rows } = await pool.query('SELECT store, product_id, name, brand, size, category FROM products ORDER BY store, name')
+  const byStore = { coles: [], woolworths: [], aldi: [] }
+  for (const r of rows) {
+    if (byStore[r.store]) {
+      byStore[r.store].push({
+        ...r,
+        normalized: normalize(r.name),
+        core: extractCoreName(r.name, r.brand),
+        sizeNorm: extractSize(r.name, r.size),
+      })
+    }
+  }
+  return byStore
+}
+
+function matchLayer1(products) {
+  // Exact: brand + size + core name
+  const groups = new Map() // key → { coles, woolworths, aldi }
+  for (const store of ['coles', 'woolworths', 'aldi']) {
+    for (const p of products[store]) {
+      if (!p.sizeNorm || !p.core) continue
+      const key = `${p.core}|${p.sizeNorm}`
+      if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
+      if (!groups.get(key)[store]) groups.get(key)[store] = p.product_id
+    }
+  }
+  // Only keep groups with 2+ stores
+  return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
+}
+
+function matchLayer2(products, existingMatched) {
+  // Fuzzy: Levenshtein < 3 on core name + same size
+  const matched = new Set(existingMatched)
+  const groups = []
+
+  for (const cp of products.coles) {
+    if (matched.has(`coles_${cp.product_id}`)) continue
+    if (!cp.sizeNorm) continue
+
+    for (const wp of products.woolworths) {
+      if (matched.has(`woolworths_${wp.product_id}`)) continue
+      if (cp.sizeNorm !== wp.sizeNorm) continue
+      if (levenshtein(cp.core, wp.core) <= 3 && cp.core.length > 5) {
+        groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
+        matched.add(`coles_${cp.product_id}`)
+        matched.add(`woolworths_${wp.product_id}`)
+        break
+      }
+    }
+  }
+  return groups
+}
+
+function matchLayer3(products, existingMatched) {
+  // Token overlap > 70% + same size
+  const matched = new Set(existingMatched)
+  const groups = []
+
+  for (const cp of products.coles) {
+    if (matched.has(`coles_${cp.product_id}`)) continue
+    if (!cp.sizeNorm) continue
+
+    for (const wp of products.woolworths) {
+      if (matched.has(`woolworths_${wp.product_id}`)) continue
+      if (cp.sizeNorm !== wp.sizeNorm) continue
+      if (tokenOverlap(cp.normalized, wp.normalized) >= 0.7) {
+        groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
+        matched.add(`coles_${cp.product_id}`)
+        matched.add(`woolworths_${wp.product_id}`)
+        break
+      }
+    }
+  }
+  return groups
+}
+
+function matchLayer4(products, existingMatched) {
+  // Aldi house brand matching — match by core product type + size
+  const matched = new Set(existingMatched)
+  const groups = []
+
+  for (const ap of products.aldi) {
+    if (matched.has(`aldi_${ap.product_id}`)) continue
+    if (!ap.sizeNorm) continue
+
+    // Try matching against Coles and Woolworths
+    let bestColes = null, bestWW = null
+
+    for (const cp of products.coles) {
+      if (matched.has(`coles_${cp.product_id}`)) continue
+      if (cp.sizeNorm !== ap.sizeNorm) continue
+      if (tokenOverlap(ap.core, cp.core) >= 0.6) { bestColes = cp; break }
+    }
+
+    for (const wp of products.woolworths) {
+      if (matched.has(`woolworths_${wp.product_id}`)) continue
+      if (wp.sizeNorm !== ap.sizeNorm) continue
+      if (tokenOverlap(ap.core, wp.core) >= 0.6) { bestWW = wp; break }
+    }
+
+    if (bestColes || bestWW) {
+      groups.push({
+        coles: bestColes?.product_id || null,
+        woolworths: bestWW?.product_id || null,
+        aldi: ap.product_id,
+        display_name: ap.name,
+        size: ap.sizeNorm,
+      })
+      matched.add(`aldi_${ap.product_id}`)
+      if (bestColes) matched.add(`coles_${bestColes.product_id}`)
+      if (bestWW) matched.add(`woolworths_${bestWW.product_id}`)
+    }
+  }
+  return groups
+}
+
+async function saveGroups(groups) {
+  if (!groups.length) return 0
+  // Clear and rebuild
+  await pool.query('TRUNCATE product_groups')
+
+  // Batch insert
+  const batchSize = 100
+  let inserted = 0
+  for (let i = 0; i < groups.length; i += batchSize) {
+    const batch = groups.slice(i, i + batchSize)
+    const values = batch.map((g, j) => {
+      const base = j * 5
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5})`
+    }).join(',')
+    const params = batch.flatMap(g => [g.coles, g.woolworths, g.aldi, g.display_name, g.size])
+    await pool.query(
+      `INSERT INTO product_groups (coles_id, woolworths_id, aldi_id, display_name, size) VALUES ${values}`,
+      params
+    )
+    inserted += batch.length
+  }
+  return inserted
+}
+
+async function main() {
+  console.log('=== Product Matcher (4-layer) ===\n')
+  console.log('Loading products...')
+  const products = await loadProducts()
+  console.log(`  Coles: ${products.coles.length} | Woolworths: ${products.woolworths.length} | Aldi: ${products.aldi.length}\n`)
+
+  // Layer 1: Exact match
+  const layer1 = matchLayer1(products)
+  console.log(`Layer 1 (exact brand+size+name): ${layer1.length} groups`)
+
+  // Track what's been matched
+  const matched = new Set()
+  for (const g of layer1) {
+    if (g.coles) matched.add(`coles_${g.coles}`)
+    if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
+    if (g.aldi) matched.add(`aldi_${g.aldi}`)
+  }
+
+  // Layer 2: Fuzzy
+  const layer2 = matchLayer2(products, matched)
+  console.log(`Layer 2 (fuzzy Levenshtein ≤3): ${layer2.length} groups`)
+  for (const g of layer2) {
+    if (g.coles) matched.add(`coles_${g.coles}`)
+    if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
+    if (g.aldi) matched.add(`aldi_${g.aldi}`)
+  }
+
+  // Layer 3: Token overlap
+  const layer3 = matchLayer3(products, matched)
+  console.log(`Layer 3 (token overlap ≥70%): ${layer3.length} groups`)
+  for (const g of layer3) {
+    if (g.coles) matched.add(`coles_${g.coles}`)
+    if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
+    if (g.aldi) matched.add(`aldi_${g.aldi}`)
+  }
+
+  // Layer 4: Aldi house brands
+  const layer4 = matchLayer4(products, matched)
+  console.log(`Layer 4 (Aldi house brand): ${layer4.length} groups`)
+
+  const allGroups = [...layer1, ...layer2, ...layer3, ...layer4]
+  console.log(`\nTotal: ${allGroups.length} product groups`)
+
+  // Stats
+  const with3 = allGroups.filter(g => g.coles && g.woolworths && g.aldi).length
+  const with2 = allGroups.length - with3
+  console.log(`  3-store matches: ${with3}`)
+  console.log(`  2-store matches: ${with2}`)
+
+  // Save
+  const saved = await saveGroups(allGroups)
+  console.log(`\nSaved ${saved} groups to product_groups table`)
+
+  await pool.end()
+}
+
+console.log(`Product matching started: ${new Date().toISOString()}`)
+main()
+  .then(() => console.log(`Done: ${new Date().toISOString()}`))
+  .catch(e => { console.error('ERROR:', e.message); process.exit(1) })
