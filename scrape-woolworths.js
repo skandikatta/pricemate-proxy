@@ -36,7 +36,7 @@ async function scrapeWoolworths() {
   let total = 0, changes = 0, failedDepts = []
 
   for (const dept of departments) {
-    for (let page = 1; page <= 50; page++) {
+    for (let page = 1; page <= 999; page++) {
       const body = JSON.stringify({
         categoryId: dept.id, pageNumber: page, pageSize: 36, sortType: 'TraderRelevance',
         url: '/shop/browse/fruit-veg', location: '/shop/browse/fruit-veg',
