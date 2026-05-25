@@ -27,13 +27,40 @@ const TOP_LEVEL_CATEGORIES = {
 }
 
 async function discoverCategories() {
-  // Use hardcoded top-level IDs (reliable) + discover subcategories (dynamic)
-  const categories = Object.entries(TOP_LEVEL_CATEGORIES).map(([slug, id]) => ({
+  // Try dynamic discovery first (resilient to ID changes)
+  try {
+    const res = await fetch(`${ALDI_BASE}/products`, { headers: { 'User-Agent': UA } })
+    if (res.ok) {
+      const html = await res.text()
+      const matches = [...html.matchAll(/href="\/products\/([^"]+)\/k\/(\d+)"/g)]
+      const seen = new Set()
+      const discovered = []
+      const SKIP = ['snow-gear', 'limited-time-only', 'liquor', 'front-of-store']
+      for (const m of matches) {
+        const slug = m[1]; const id = m[2]
+        const topLevel = slug.split('/')[0]
+        if (SKIP.includes(topLevel)) continue
+        // Only top-level (no slash in slug)
+        if (slug.includes('/')) continue
+        const url = `/products/${slug}/k/${id}`
+        if (seen.has(topLevel)) continue
+        seen.add(topLevel)
+        discovered.push({ url, name: topLevel.replace(/-/g, ' '), id })
+      }
+      if (discovered.length >= 10) {
+        console.log(`  Discovered ${discovered.length} categories dynamically`)
+        return discovered
+      }
+    }
+  } catch (e) { console.warn('  Dynamic discovery failed:', e.message) }
+
+  // Fallback: hardcoded IDs (last verified May 2026)
+  console.log('  Using hardcoded category IDs (fallback)')
+  return Object.entries(TOP_LEVEL_CATEGORIES).map(([slug, id]) => ({
     url: `/products/${slug}/k/${id}`,
     name: slug.replace(/-/g, ' '),
     id,
   }))
-  return categories
 }
 
 async function scrapeCategory(url) {
