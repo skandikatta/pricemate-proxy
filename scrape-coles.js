@@ -7,7 +7,9 @@ async function scrapeColes() {
   const categories = [
     'dairy-eggs-fridge', 'fruit-vegetables', 'meat-seafood', 'pantry',
     'drinks', 'frozen', 'bakery', 'household',
-    'health-beauty', 'baby', 'pet', 'liquor',
+    'health-beauty', 'baby', 'pet', 'deli',
+    'cleaning-laundry', 'chips-chocolates-snacks', 'dietary-world-foods',
+    'home-garden',
   ]
   let total = 0, changes = 0, failedCategories = []
 
