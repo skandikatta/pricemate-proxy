@@ -20,20 +20,18 @@ async function scrapeWoolworths() {
   console.log('Cookies obtained ✓')
 
   const departments = [
-    // Food
     { id: '1-E5BEE36E', name: 'fruit-veg' },
     { id: '1_DEB537E', name: 'bakery' },
-    { id: '1_D5A2236', name: 'meat' },
-    { id: '1_6E4F4E4', name: 'dairy' },
+    { id: '1_D5A2236', name: 'meat-seafood-deli' },
+    { id: '1_6E4F4E4', name: 'dairy-eggs-fridge' },
     { id: '1_39FD49C', name: 'pantry' },
     { id: '1_ACA2FC2', name: 'frozen' },
     { id: '1_5AF3A0A', name: 'drinks' },
-    // Non-food
-    { id: '1_717DAA5', name: 'health-beauty' },
-    { id: '1_8A52B03', name: 'cleaning-household' },
-    { id: '1_3151F68', name: 'baby' },
-    { id: '1_B7B4F34', name: 'pet' },
-    { id: '1_4735919', name: 'lunch-box' },
+    { id: '1_894D0A8', name: 'health-beauty' },
+    { id: '1_2432B58', name: 'household' },
+    { id: '1_717A94B', name: 'baby' },
+    { id: '1_61D6FEB', name: 'pet' },
+    { id: '1_B63CF9E', name: 'front-of-store' },
   ]
   let total = 0, changes = 0, failedDepts = []
 
