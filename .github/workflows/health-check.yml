@@ -1,0 +1,103 @@
+name: Scrape Health Check
+
+on:
+  schedule:
+    - cron: "0 22 * * *"  # Runs 3 hours after scrapers finish
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install pg
+      - name: Check scraper health
+        id: health
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          node -e "
+          const { Pool } = require('pg')
+          const pool = new Pool({ host: process.env.DB_HOST, port: 5432, database: 'pricemate', user: 'pricemate', password: process.env.DB_PASSWORD })
+
+          async function check() {
+            // Check: did each store get data today?
+            const { rows } = await pool.query(\`
+              SELECT store, COUNT(*) as today_count,
+                     MAX(scraped_at) as last_scrape
+              FROM price_history
+              WHERE scraped_at > NOW() - INTERVAL '26 hours'
+              GROUP BY store
+            \`)
+
+            const stores = { coles: 0, woolworths: 0, aldi: 0 }
+            for (const r of rows) stores[r.store] = parseInt(r.today_count)
+
+            const issues = []
+            if (stores.coles === 0) issues.push('Coles: 0 price changes today')
+            if (stores.woolworths === 0) issues.push('Woolworths: 0 price changes today')
+            if (stores.aldi === 0) issues.push('Aldi: 0 price changes today')
+
+            // Check total products (should be growing, not shrinking)
+            const { rows: totals } = await pool.query('SELECT store, COUNT(*) as total FROM products GROUP BY store')
+            for (const r of totals) {
+              if (parseInt(r.total) < 100) issues.push(r.store + ': only ' + r.total + ' products in DB (expected 1000+)')
+            }
+
+            console.log('=== Scraper Health Check ===')
+            console.log('Today\\'s price changes:', JSON.stringify(stores))
+            console.log('Total products:', JSON.stringify(Object.fromEntries(totals.map(r => [r.store, parseInt(r.total)]))))
+
+            if (issues.length > 0) {
+              console.log('\\n⚠️  ISSUES:')
+              issues.forEach(i => console.log('  -', i))
+              // Write to output for notification step
+              const fs = require('fs')
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'has_issues=true\n')
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'issues=' + issues.join(' | ') + '\n')
+            } else {
+              console.log('\\n✅ All scrapers healthy')
+              const fs = require('fs')
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'has_issues=false\n')
+            }
+
+            await pool.end()
+          }
+          check()
+          "
+
+      - name: Create issue on failure
+        if: steps.health.outputs.has_issues == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = '${{ steps.health.outputs.issues }}'
+            // Check if there's already an open issue
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'scraper-alert'
+            })
+            if (existing.data.length > 0) {
+              // Add comment to existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Still failing (${new Date().toISOString().split('T')[0]}):\n${issues}`
+              })
+            } else {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '⚠️ Scraper health check failed',
+                body: `The daily health check detected issues:\n\n${issues.split(' | ').map(i => '- ' + i).join('\n')}\n\nThis usually means a store changed their website. Check the scraper logs.`,
+                labels: ['scraper-alert']
+              })
+            }

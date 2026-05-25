@@ -19,3 +19,6 @@ jobs:
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      - name: Check for warnings
+        if: always()
+        run: echo "Scraper exited with code $? — check logs for WARNING lines"
