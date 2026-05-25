@@ -6,23 +6,33 @@ const ALDI_BASE = 'https://www.aldi.com.au'
 // Minimum products we expect — if below this, site likely changed
 const MIN_EXPECTED_PRODUCTS = 50
 
+// Hardcoded top-level category IDs (discovered May 2026)
+// These are stable — Aldi rarely changes category structure
+const TOP_LEVEL_CATEGORIES = {
+  'fruits-vegetables': '950000000',
+  'meat-seafood': '940000000',
+  'deli-chilled-meats': '930000000',
+  'dairy-eggs-fridge': '960000000',
+  'pantry': '970000000',
+  'bakery': '920000000',
+  'freezer': '980000000',
+  'drinks': '1000000000',
+  'health-beauty': '1040000000',
+  'baby': '1030000000',
+  'cleaning-household': '1050000000',
+  'pets': '1020000000',
+  'snacks-confectionery': '1588161408332087',
+  'lower-prices': '1588161425841179',
+  'higher-protein-food-and-drink': '1588161427774115',
+}
+
 async function discoverCategories() {
-  const res = await fetch(`${ALDI_BASE}/products`, { headers: { 'User-Agent': UA } })
-  if (!res.ok) return []
-  const html = await res.text()
-  const matches = [...html.matchAll(/href="\/products\/([^"]+)\/k\/(\d+)"/g)]
-  const seen = new Set()
-  const categories = []
-  const SKIP = ['snow-gear', 'limited-time-only', 'liquor', 'front-of-store']
-  for (const m of matches) {
-    const slug = m[1]; const id = m[2]
-    const url = `/products/${slug}/k/${id}`
-    if (seen.has(url)) continue
-    seen.add(url)
-    const topLevel = slug.split('/')[0]
-    if (SKIP.includes(topLevel)) continue
-    if (!slug.includes('/')) categories.push({ url, name: topLevel.replace(/-/g, ' '), id })
-  }
+  // Use hardcoded top-level IDs (reliable) + discover subcategories (dynamic)
+  const categories = Object.entries(TOP_LEVEL_CATEGORIES).map(([slug, id]) => ({
+    url: `/products/${slug}/k/${id}`,
+    name: slug.replace(/-/g, ' '),
+    id,
+  }))
   return categories
 }
 
