@@ -1,6 +1,7 @@
 const { upsertProducts, insertPriceChanges, close } = require('./db')
 const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
+const MIN_EXPECTED_PRODUCTS = 100
 
 async function getWoolworthsCookies() {
   const res = await fetch(`${WOOLWORTHS_BASE}/shop/browse/fruit-veg`, { headers: { 'User-Agent': UA }, redirect: 'manual' })
@@ -11,7 +12,11 @@ async function getWoolworthsCookies() {
 async function scrapeWoolworths() {
   console.log('=== WOOLWORTHS (direct) ===')
   const cookies = await getWoolworthsCookies()
-  if (!cookies) { console.log('ERROR: Failed to get cookies'); process.exit(1) }
+  if (!cookies) {
+    console.warn('WARNING: Failed to get cookies — Woolworths may have changed auth.')
+    console.warn('Exiting gracefully — existing DB data preserved.')
+    return
+  }
   console.log('Cookies obtained ✓')
 
   const departments = [
@@ -23,7 +28,7 @@ async function scrapeWoolworths() {
     { id: '1_ACA2FC2', name: 'frozen' },
     { id: '1_5AF3A0A', name: 'drinks' },
   ]
-  let total = 0, changes = 0
+  let total = 0, changes = 0, failedDepts = []
 
   for (const dept of departments) {
     for (let page = 1; page <= 999; page++) {
@@ -36,39 +41,53 @@ async function scrapeWoolworths() {
         enableAdReRanking: false, groupEdmVariants: true, categoryVersion: 'v2'
       })
       process.stdout.write(`  ${dept.name} p${page}...`)
-      const r = await fetch(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
-        method: 'POST',
-        headers: { 'User-Agent': UA, 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': cookies },
-        body
-      })
-      if (!r.ok) { console.log(` HTTP ${r.status}, stopping`); break }
-      const data = await r.json()
-      const bundles = data.Bundles || []
-      if (bundles.length === 0) { console.log(' empty, done'); break }
-      const results = bundles.flatMap(b => b.Products || [])
-      if (results.length < 10) { console.log(` only ${results.length} (filler), done`); break }
+      try {
+        const r = await fetch(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
+          method: 'POST',
+          headers: { 'User-Agent': UA, 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': cookies },
+          body
+        })
+        if (!r.ok) { console.log(` HTTP ${r.status}, stopping`); break }
+        const data = await r.json()
+        const bundles = data.Bundles || []
+        if (bundles.length === 0) { console.log(' empty, done'); break }
+        const results = bundles.flatMap(b => b.Products || [])
+        if (results.length < 10) { console.log(` only ${results.length} (filler), done`); break }
 
-      const products = results.map(p => ({
-        store: 'woolworths', product_id: String(p.Stockcode), name: p.Name || p.DisplayName,
-        brand: p.Brand || null, size: p.PackageSize || null, category: dept.name,
-        image: p.LargeImageFile || p.MediumImageFile || null,
-      }))
+        const products = results.map(p => ({
+          store: 'woolworths', product_id: String(p.Stockcode), name: p.Name || p.DisplayName,
+          brand: p.Brand || null, size: p.PackageSize || null, category: dept.name,
+          image: p.LargeImageFile || p.MediumImageFile || null,
+        }))
 
-      const prices = results.map(p => ({
-        store: 'woolworths', product_id: String(p.Stockcode), price: p.Price || 0,
-        was_price: p.WasPrice || null, is_on_special: p.IsOnSpecial || false,
-      }))
+        const prices = results.map(p => ({
+          store: 'woolworths', product_id: String(p.Stockcode), price: p.Price || 0,
+          was_price: p.WasPrice || null, is_on_special: p.IsOnSpecial || false,
+        }))
 
-      await upsertProducts(products)
-      const changed = await insertPriceChanges(prices)
-      changes += changed
-      total += products.length
-      console.log(` ${results.length} products (${changed} changes)`)
-      await sleep(100)
+        await upsertProducts(products)
+        const changed = await insertPriceChanges(prices)
+        changes += changed
+        total += products.length
+        console.log(` ${results.length} products (${changed} changes)`)
+        await sleep(100)
+      } catch (e) {
+        console.log(` ERROR: ${e.message}`)
+        failedDepts.push(dept.name)
+        break
+      }
     }
-    console.log(`  ✓ ${dept.name}: ${total} cumulative`)
   }
+
+  if (failedDepts.length > 0) console.warn(`WARNING: Failed departments: ${failedDepts.join(', ')}`)
   console.log(`\nWoolworths done: ${total} products, ${changes} price changes`)
+
+  if (total === 0) {
+    console.warn('WARNING: Zero products scraped. Woolworths API may have changed.')
+    console.warn('Existing DB data preserved.')
+  } else if (total < MIN_EXPECTED_PRODUCTS) {
+    console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+).`)
+  }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -76,4 +95,9 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 console.log(`Woolworths scrape started: ${new Date().toISOString()}`)
 scrapeWoolworths()
   .then(() => { console.log(`Woolworths scrape complete: ${new Date().toISOString()}`); return close() })
-  .catch(e => { console.error('FAILED:', e.message); process.exit(1) })
+  .catch(e => {
+    console.error('UNEXPECTED ERROR:', e.message)
+    console.error('Exiting gracefully — existing DB data preserved.')
+    process.exitCode = 0
+    return close()
+  })

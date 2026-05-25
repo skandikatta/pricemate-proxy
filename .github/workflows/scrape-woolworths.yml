@@ -16,16 +16,6 @@ jobs:
           node-version: "20"
       - run: npm install pg
       - run: node scrape-woolworths.js
-        id: scrape
-        env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      - name: Retry on failure
-        if: failure()
-        run: |
-          echo "First attempt failed, retrying in 60s..."
-          sleep 60
-          node scrape-woolworths.js
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
