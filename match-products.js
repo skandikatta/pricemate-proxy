@@ -62,6 +62,17 @@ function tokenize(str) {
   return str.toLowerCase().split(/\s+/).filter(w => w.length > 2)
 }
 
+function tokenSortRatio(a, b) {
+  const ta = tokenize(a).sort().join(' ')
+  const tb = tokenize(b).sort().join(' ')
+  if (!ta || !tb) return 0
+  // Levenshtein-based similarity on sorted token strings
+  const maxLen = Math.max(ta.length, tb.length)
+  if (maxLen === 0) return 0
+  const dist = levenshtein(ta, tb)
+  return 1 - dist / maxLen
+}
+
 function tokenOverlap(a, b) {
   const ta = new Set(tokenize(a))
   const tb = new Set(tokenize(b))
@@ -83,7 +94,7 @@ function levenshtein(a, b) {
 }
 
 async function loadProducts() {
-  const { rows } = await pool.query('SELECT store, product_id, name, brand, size, category FROM products ORDER BY store, name')
+  const { rows } = await pool.query('SELECT store, product_id, name, brand, size, category, barcode FROM products ORDER BY store, name')
   const byStore = { coles: [], woolworths: [], aldi: [] }
   for (const r of rows) {
     if (byStore[r.store]) {
@@ -96,6 +107,19 @@ async function loadProducts() {
     }
   }
   return byStore
+}
+
+function matchLayer0(products) {
+  // Barcode: exact EAN match across stores (100% accurate)
+  const barcodeMap = new Map() // barcode → { coles, woolworths, aldi, display_name, size }
+  for (const store of ['coles', 'woolworths', 'aldi']) {
+    for (const p of products[store]) {
+      if (!p.barcode) continue
+      if (!barcodeMap.has(p.barcode)) barcodeMap.set(p.barcode, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
+      if (!barcodeMap.get(p.barcode)[store]) barcodeMap.get(p.barcode)[store] = p.product_id
+    }
+  }
+  return [...barcodeMap.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
 }
 
 function matchLayer1(products) {
@@ -137,7 +161,7 @@ function matchLayer2(products, existingMatched) {
 }
 
 function matchLayer3(products, existingMatched) {
-  // Token overlap > 70% + same size + same brand (or one has no brand)
+  // Token sort ratio > 80% + same size + same brand (or one has no brand)
   const matched = new Set(existingMatched)
   const groups = []
   const storeBrands = new Set(['coles', 'woolworths', 'woolworths free from', 'woolworths essentials', 'woolworths macro', 'coles simply', 'coles finest', 'coles nature\'s kitchen'])
@@ -153,7 +177,7 @@ function matchLayer3(products, existingMatched) {
       const cb = normalize(cp.brand || '')
       const wb = normalize(wp.brand || '')
       if (cb && wb && cb !== wb && !storeBrands.has(cb) && !storeBrands.has(wb)) continue
-      if (tokenOverlap(cp.normalized, wp.normalized) >= 0.7) {
+      if (tokenSortRatio(cp.normalized, wp.normalized) >= 0.80) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
         matched.add(`woolworths_${wp.product_id}`)
@@ -184,7 +208,7 @@ function matchLayer4(products, existingMatched) {
       const cb = normalize(cp.brand || '')
       // Only match to store-brand or brandless Coles products
       if (cb && !storeBrands.has(cb)) continue
-      if (tokenOverlap(ap.core, cp.core) >= 0.75) { bestColes = cp; break }
+      if (tokenSortRatio(ap.core, cp.core) >= 0.75) { bestColes = cp; break }
     }
 
     for (const wp of products.woolworths) {
@@ -192,7 +216,7 @@ function matchLayer4(products, existingMatched) {
       if (wp.sizeNorm !== ap.sizeNorm) continue
       const wb = normalize(wp.brand || '')
       if (wb && !storeBrands.has(wb)) continue
-      if (tokenOverlap(ap.core, wp.core) >= 0.75) { bestWW = wp; break }
+      if (tokenSortRatio(ap.core, wp.core) >= 0.75) { bestWW = wp; break }
     }
 
     if (bestColes || bestWW) {
@@ -241,12 +265,21 @@ async function main() {
   const products = await loadProducts()
   console.log(`  Coles: ${products.coles.length} | Woolworths: ${products.woolworths.length} | Aldi: ${products.aldi.length}\n`)
 
-  // Layer 1: Exact match
-  const layer1 = matchLayer1(products)
-  console.log(`Layer 1 (exact brand+size+name): ${layer1.length} groups`)
+  // Layer 0: Barcode match
+  const layer0 = matchLayer0(products)
+  console.log(`Layer 0 (barcode EAN match): ${layer0.length} groups`)
 
   // Track what's been matched
   const matched = new Set()
+  for (const g of layer0) {
+    if (g.coles) matched.add(`coles_${g.coles}`)
+    if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
+    if (g.aldi) matched.add(`aldi_${g.aldi}`)
+  }
+
+  // Layer 1: Exact match
+  const layer1 = matchLayer1(products)
+  console.log(`Layer 1 (exact brand+size+name): ${layer1.length} groups`)
   for (const g of layer1) {
     if (g.coles) matched.add(`coles_${g.coles}`)
     if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
@@ -264,7 +297,7 @@ async function main() {
 
   // Layer 3: Token overlap
   const layer3 = matchLayer3(products, matched)
-  console.log(`Layer 3 (token overlap ≥70%): ${layer3.length} groups`)
+  console.log(`Layer 3 (token sort ratio ≥80%): ${layer3.length} groups`)
   for (const g of layer3) {
     if (g.coles) matched.add(`coles_${g.coles}`)
     if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
@@ -275,7 +308,7 @@ async function main() {
   const layer4 = matchLayer4(products, matched)
   console.log(`Layer 4 (Aldi house brand): ${layer4.length} groups`)
 
-  const allGroups = [...layer1, ...layer2, ...layer3, ...layer4]
+  const allGroups = [...layer0, ...layer1, ...layer2, ...layer3, ...layer4]
   console.log(`\nTotal: ${allGroups.length} product groups`)
 
   // Stats
