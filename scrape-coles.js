@@ -6,7 +6,7 @@ async function scrapeColes() {
   console.log('=== COLES (via Render proxy) ===')
   const categories = [
     'dairy-eggs-fridge', 'fruit-vegetables', 'meat-seafood', 'pantry',
-    'drinks', 'frozen', 'bakery', 'household',
+    'drinks', 'frozen', 'bakery',
     'health-beauty', 'baby', 'pet', 'deli',
     'cleaning-laundry', 'chips-chocolates-snacks', 'dietary-world-foods',
     'home-garden',
