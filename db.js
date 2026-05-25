@@ -62,6 +62,12 @@ async function upsertProducts(products) {
         'UPDATE price_history SET product_id = $1 WHERE store = $2 AND product_id = $3',
         [p.product_id, store, oldId]
       )
+      // Update product_groups too
+      const col = store === 'coles' ? 'coles_id' : store === 'woolworths' ? 'woolworths_id' : 'aldi_id'
+      await pool.query(
+        `UPDATE product_groups SET ${col} = $1 WHERE ${col} = $2`,
+        [p.product_id, oldId]
+      )
       existingIds.delete(oldId)
       existingIds.add(p.product_id)
       nameToId.set(normalName, p.product_id)
