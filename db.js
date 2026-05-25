@@ -101,6 +101,11 @@ async function upsertProducts(products) {
 
 async function insertPriceChanges(prices) {
   if (!prices.length) return 0
+  // Deduplicate by product_id (same product can appear in multiple categories)
+  const seen = new Map()
+  for (const p of prices) seen.set(p.product_id, p)
+  prices = [...seen.values()]
+
   const ids = prices.map(p => p.product_id)
   const store = prices[0].store
   const { rows } = await pool.query(
