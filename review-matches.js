@@ -49,8 +49,8 @@ async function main() {
     const g = groups[i]
     console.log(`--- #${start + i + 1} / ${start + groups.length} ---`)
     console.log(`  Size: ${g.size || '?'}`)
-    if (g.coles_name) console.log(`  🔴 Coles:       ${g.coles_name} [${g.coles_brand || ''}]`)
-    if (g.ww_name)    console.log(`  🟢 Woolworths:  ${g.ww_name} [${g.ww_brand || ''}]`)
+    if (g.coles_name) console.log(`  🔴 Coles:       ${g.coles_name} [${g.coles_brand || ''}]\n     https://www.coles.com.au/product/${g.coles_id}`)
+    if (g.ww_name)    console.log(`  🟢 Woolworths:  ${g.ww_name} [${g.ww_brand || ''}]\n     https://www.woolworths.com.au/shop/productdetails/${g.woolworths_id}`)
     if (g.aldi_name)  console.log(`  🔵 Aldi:        ${g.aldi_name} [${g.aldi_brand || ''}]`)
 
     const answer = await ask('  Match? (y/n/s/q): ')
