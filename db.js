@@ -73,12 +73,19 @@ async function upsertProducts(products) {
     console.log(`  [ID migration] ${migrated} products had ID changes — history preserved`)
   }
 
-  // Now do the normal upsert
-  const values = products.map((p, i) => {
+  // Now do the normal upsert (deduplicate by product_id first)
+  const seen = new Set()
+  const deduped = products.filter(p => {
+    if (seen.has(p.product_id)) return false
+    seen.add(p.product_id)
+    return true
+  })
+
+  const values = deduped.map((p, i) => {
     const base = i * 7
     return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7})`
   }).join(',')
-  const params = products.flatMap(p => [p.store, p.product_id, p.name, p.brand || null, p.size || null, p.category || null, p.image || null])
+  const params = deduped.flatMap(p => [p.store, p.product_id, p.name, p.brand || null, p.size || null, p.category || null, p.image || null])
   await pool.query(
     `INSERT INTO products (store,product_id,name,brand,size,category,image) VALUES ${values}
      ON CONFLICT (store,product_id) DO UPDATE SET name=EXCLUDED.name, brand=EXCLUDED.brand, size=EXCLUDED.size, category=EXCLUDED.category, image=EXCLUDED.image`,
