@@ -96,8 +96,15 @@ console.log(`Woolworths scrape started: ${new Date().toISOString()}`)
 scrapeWoolworths()
   .then(() => { console.log(`Woolworths scrape complete: ${new Date().toISOString()}`); return close() })
   .catch(e => {
-    console.error('UNEXPECTED ERROR:', e.message)
-    console.error('Exiting gracefully — existing DB data preserved.')
-    process.exitCode = 0
+    const external = ['fetch failed', 'ECONNREFUSED', 'ETIMEDOUT', 'HTTP', 'cookies', 'Woolworths']
+    const isExternal = external.some(msg => e.message?.includes(msg))
+    if (isExternal) {
+      console.warn('EXTERNAL FAILURE:', e.message)
+      process.exitCode = 0
+    } else {
+      console.error('CODE BUG:', e.message)
+      console.error(e.stack)
+      process.exitCode = 1
+    }
     return close()
   })

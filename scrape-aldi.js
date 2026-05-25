@@ -107,9 +107,25 @@ console.log(`Aldi scrape started: ${new Date().toISOString()}`)
 main()
   .then(() => { console.log(`Aldi scrape complete: ${new Date().toISOString()}`); return close() })
   .catch(e => {
-    // Unexpected crash — still exit 0 to not break pipeline
-    console.error('UNEXPECTED ERROR:', e.message)
-    console.error('Exiting gracefully — existing DB data preserved.')
-    process.exitCode = 0
+    // Classify: external (site changed) vs internal (our bug)
+    const external = [
+      'No products extracted',
+      'Failed to get',
+      'HTTP',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'fetch failed',
+    ]
+    const isExternal = external.some(msg => e.message?.includes(msg))
+
+    if (isExternal) {
+      console.warn('EXTERNAL FAILURE:', e.message)
+      console.warn('Site may have changed — existing DB data preserved.')
+      process.exitCode = 0  // Don't break pipeline
+    } else {
+      console.error('CODE BUG:', e.message)
+      console.error(e.stack)
+      process.exitCode = 1  // Break pipeline — needs fix
+    }
     return close()
   })
