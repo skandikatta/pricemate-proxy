@@ -41,7 +41,7 @@ async function scrapeColes() {
         changes += changed
         total += products.length
         console.log(` ${results.length} products (${changed} changes)`)
-        await sleep(1500)
+        await sleep(500)
       } catch (e) {
         console.log(` ERROR: ${e.message}`)
         failedCategories.push(cat)
