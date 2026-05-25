@@ -137,9 +137,10 @@ function matchLayer2(products, existingMatched) {
 }
 
 function matchLayer3(products, existingMatched) {
-  // Token overlap > 70% + same size
+  // Token overlap > 70% + same size + same brand (or one has no brand)
   const matched = new Set(existingMatched)
   const groups = []
+  const storeBrands = new Set(['coles', 'woolworths', 'woolworths free from', 'woolworths essentials', 'woolworths macro', 'coles simply', 'coles finest', 'coles nature\'s kitchen'])
 
   for (const cp of products.coles) {
     if (matched.has(`coles_${cp.product_id}`)) continue
@@ -148,6 +149,10 @@ function matchLayer3(products, existingMatched) {
     for (const wp of products.woolworths) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
       if (cp.sizeNorm !== wp.sizeNorm) continue
+      // Brand check: reject if both have specific different brands (neither is a store brand)
+      const cb = normalize(cp.brand || '')
+      const wb = normalize(wp.brand || '')
+      if (cb && wb && cb !== wb && !storeBrands.has(cb) && !storeBrands.has(wb)) continue
       if (tokenOverlap(cp.normalized, wp.normalized) >= 0.7) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
@@ -161,26 +166,33 @@ function matchLayer3(products, existingMatched) {
 
 function matchLayer4(products, existingMatched) {
   // Aldi house brand matching — match by core product type + size
+  // Only match Aldi house brands to store-brand or brandless equivalents at Coles/WW
+  // Never match to a specific named brand (Rokeby, a2, Pauls etc)
   const matched = new Set(existingMatched)
   const groups = []
+  const storeBrands = new Set(['coles', 'woolworths', 'woolworths free from', 'woolworths essentials', 'woolworths macro', 'coles simply', 'coles finest', 'coles nature\'s kitchen', ''])
 
   for (const ap of products.aldi) {
     if (matched.has(`aldi_${ap.product_id}`)) continue
     if (!ap.sizeNorm) continue
 
-    // Try matching against Coles and Woolworths
     let bestColes = null, bestWW = null
 
     for (const cp of products.coles) {
       if (matched.has(`coles_${cp.product_id}`)) continue
       if (cp.sizeNorm !== ap.sizeNorm) continue
-      if (tokenOverlap(ap.core, cp.core) >= 0.6) { bestColes = cp; break }
+      const cb = normalize(cp.brand || '')
+      // Only match to store-brand or brandless Coles products
+      if (cb && !storeBrands.has(cb)) continue
+      if (tokenOverlap(ap.core, cp.core) >= 0.75) { bestColes = cp; break }
     }
 
     for (const wp of products.woolworths) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
       if (wp.sizeNorm !== ap.sizeNorm) continue
-      if (tokenOverlap(ap.core, wp.core) >= 0.6) { bestWW = wp; break }
+      const wb = normalize(wp.brand || '')
+      if (wb && !storeBrands.has(wb)) continue
+      if (tokenOverlap(ap.core, wp.core) >= 0.75) { bestWW = wp; break }
     }
 
     if (bestColes || bestWW) {
