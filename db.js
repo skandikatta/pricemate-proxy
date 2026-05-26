@@ -29,10 +29,9 @@ async function upsertProducts(products) {
   if (!products.length) return
 
   // Skip products with no usable name — they're useless for matching and clutter the matcher.
-  const skipped = products.length
+  // Silent skip: per-page logs interleave with scraper progress output. Aggregate count
+  // can be queried from DB if needed.
   products = products.filter(p => p.product_id && p.name && String(p.name).trim().length > 0)
-  const dropped = skipped - products.length
-  if (dropped > 0) console.log(`  [skip] ${dropped} products with missing id/name`)
   if (!products.length) return
 
   // Dedupe by product_id (same product can appear in multiple categories within one scrape)
@@ -62,13 +61,11 @@ async function insertPriceChanges(prices) {
   if (!prices.length) return 0
 
   // Filter out junk: missing price, zero, negative, NaN. Storing $0 corrupts cycle detection.
-  const skipped = prices.length
+  // Silent skip: per-page logs interleave with scraper progress output.
   prices = prices.filter(p => {
     const n = parseFloat(p.price)
     return Number.isFinite(n) && n > 0
   })
-  const droppedZeros = skipped - prices.length
-  if (droppedZeros > 0) console.log(`  [skip] ${droppedZeros} products with zero/invalid price`)
   if (!prices.length) return 0
 
   // Deduplicate by product_id (same product can appear in multiple categories)
