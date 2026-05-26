@@ -17,7 +17,7 @@ const pool = new Pool({
  */
 function normalizeName(name) {
   return (name || '').toLowerCase()
-    .replace(/[''""]/g, '')
+    .replace(/['"‘’“”]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -136,4 +136,4 @@ async function insertPriceChanges(prices) {
 
 async function close() { await pool.end() }
 
-module.exports = { upsertProducts, insertPriceChanges, close }
+module.exports = { upsertProducts, insertPriceChanges, close, normalizeName }

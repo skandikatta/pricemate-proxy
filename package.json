@@ -2,10 +2,15 @@
   "name": "pricemate-proxy",
   "version": "1.0.0",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "express": "^4.22.2",
     "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
   }
 }

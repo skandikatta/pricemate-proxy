@@ -33,7 +33,7 @@ const BRAND_EQUIVALENTS = [
 
 function normalize(name) {
   return (name || '').toLowerCase()
-    .replace(/[''""&]/g, ' ')
+    .replace(/['"‘’“”&]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/\b(each|loose|approx|per kg|kg|g|ml|l|pk|pack)\b/gi, m => m) // keep units
     .trim()
@@ -324,7 +324,29 @@ async function main() {
   await pool.end()
 }
 
-console.log(`Product matching started: ${new Date().toISOString()}`)
-main()
-  .then(() => console.log(`Done: ${new Date().toISOString()}`))
-  .catch(e => { console.error('ERROR:', e.message); process.exit(1) })
+module.exports = {
+  HOUSE_BRANDS,
+  BRAND_EQUIVALENTS,
+  normalize,
+  extractSize,
+  extractCoreName,
+  tokenize,
+  tokenSortRatio,
+  tokenOverlap,
+  levenshtein,
+  matchLayer0,
+  matchLayer1,
+  matchLayer2,
+  matchLayer3,
+  matchLayer4,
+  loadProducts,
+  saveGroups,
+  main,
+}
+
+if (require.main === module) {
+  console.log(`Product matching started: ${new Date().toISOString()}`)
+  main()
+    .then(() => console.log(`Done: ${new Date().toISOString()}`))
+    .catch(e => { console.error('ERROR:', e.message); process.exit(1) })
+}
