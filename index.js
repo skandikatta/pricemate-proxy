@@ -9,18 +9,30 @@ const IMG_BASE_WOOLWORTHS = 'https://cdn0.woolworths.media/content/wowproductima
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
 
 // --- COLES ---
+// Last-known-good buildId. Coles changes this roughly weekly. Falls back to this
+// if Imperva blocks the homepage fetch (datacenter IP flagged). Update manually
+// after confirming a new buildId works.
+const FALLBACK_BUILD_ID = '20260519.2-dc6ca4a12a99dc741883de303f8dfa9ced7179b3'
 let buildId = null
 let buildIdTime = 0
 
 async function getBuildId() {
-  if (buildId && Date.now() - buildIdTime < 3600000) return buildId
-  const res = await fetch(COLES_BASE, { headers: { 'User-Agent': UA } })
-  const html = await res.text()
-  const match = html.match(/"buildId":"([^"]+)"/)
-  if (!match) throw new Error('Cannot extract buildId')
-  buildId = match[1]
-  buildIdTime = Date.now()
-  return buildId
+  // Cache aggressively — buildId changes only on Coles deploy (weekly-ish).
+  if (buildId && Date.now() - buildIdTime < 86400000) return buildId
+  try {
+    const res = await fetch(COLES_BASE, { headers: { 'User-Agent': UA } })
+    const html = await res.text()
+    const match = html.match(/"buildId":"([^"]+)"/)
+    if (!match) throw new Error('No __NEXT_DATA__ in homepage (likely Imperva block)')
+    buildId = match[1]
+    buildIdTime = Date.now()
+    return buildId
+  } catch (e) {
+    console.warn(`[buildId fetch failed] ${e.message} — falling back to ${FALLBACK_BUILD_ID}`)
+    // Use last-known buildId rather than failing the whole scrape. Coles serves
+    // older buildIds for ~1 week before they go 404, so this buys headroom.
+    return FALLBACK_BUILD_ID
+  }
 }
 
 // --- WOOLWORTHS (cookie-jar technique) ---
@@ -173,12 +185,21 @@ function walkFor(obj, key) {
 
 app.get('/api/coles/categories', async (req, res) => {
   try {
-    if (colesCategories && Date.now() - colesCategoriesTime < 3600000) {
+    // Hold cached list for 24h. Categories rotate maybe quarterly, so stale-but-valid
+    // is far better than failing the scrape entirely when Imperva flags our IP.
+    if (colesCategories && Date.now() - colesCategoriesTime < 86400000) {
       return res.json({ categories: colesCategories, cached: true })
     }
     const html = await fetch(COLES_BASE, { headers: { 'User-Agent': UA } }).then(r => r.text())
     const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/)
-    if (!match) return res.status(502).json({ error: 'No __NEXT_DATA__ found in homepage' })
+    if (!match) {
+      // Imperva blocked us. If we have any cached list (even >24h old), serve it.
+      if (colesCategories) {
+        console.warn('[coles/categories] homepage block — serving stale cache')
+        return res.json({ categories: colesCategories, cached: true, stale: true })
+      }
+      return res.status(502).json({ error: 'No __NEXT_DATA__ found in homepage' })
+    }
     const data = JSON.parse(match[1])
     const items = walkFor(data.props?.pageProps, 'categoryItems') || []
     const categories = items
