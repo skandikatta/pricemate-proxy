@@ -122,12 +122,14 @@ function matchLayer0(products) {
   return [...barcodeMap.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
 }
 
-function matchLayer1(products) {
+function matchLayer1(products, existingMatched) {
   // Exact: brand + size + core name
+  const matched = new Set(existingMatched || [])
   const groups = new Map() // key → { coles, woolworths, aldi }
   for (const store of ['coles', 'woolworths', 'aldi']) {
     for (const p of products[store]) {
       if (!p.sizeNorm || !p.core) continue
+      if (matched.has(`${store}_${p.product_id}`)) continue
       const key = `${p.core}|${p.sizeNorm}`
       if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
       if (!groups.get(key)[store]) groups.get(key)[store] = p.product_id
@@ -277,8 +279,8 @@ async function main() {
     if (g.aldi) matched.add(`aldi_${g.aldi}`)
   }
 
-  // Layer 1: Exact match
-  const layer1 = matchLayer1(products)
+  // Layer 1: Exact match (skip products already matched by Layer 0 to avoid duplicate groups)
+  const layer1 = matchLayer1(products, matched)
   console.log(`Layer 1 (exact brand+size+name): ${layer1.length} groups`)
   for (const g of layer1) {
     if (g.coles) matched.add(`coles_${g.coles}`)
