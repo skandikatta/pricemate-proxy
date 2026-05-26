@@ -1,0 +1,45 @@
+name: Send sale alerts
+
+# Runs 90 min after the latest scrape finishes (Coles=19:00, Woolies=19:00,
+# Aldi=19:30 UTC). 21:00 UTC ≈ 7:00 AEST — alerts land before users start
+# checking phones for the day.
+
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pricemate-proxy
+        uses: actions/checkout@v4
+
+      # The email templates live in the frontend repo (pricemate). Check it out
+      # alongside so send-alerts.js can require ../pricemate/emails/*.
+      - name: Checkout pricemate (for email templates)
+        uses: actions/checkout@v4
+        with:
+          repository: skandikatta/pricemate
+          path: ../pricemate
+          # Frontend repo is private — use a deploy key or fine-grained PAT
+          # stored as a secret. Add the secret as PRICEMATE_REPO_TOKEN.
+          token: ${{ secrets.PRICEMATE_REPO_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm install pg resend @react-email/render @react-email/components react react-dom @swc/register
+
+      - name: Send alerts
+        run: node send-alerts.js
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          FROM_ADDRESS: ${{ secrets.FROM_ADDRESS }}
