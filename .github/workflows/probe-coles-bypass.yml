@@ -142,9 +142,9 @@ jobs:
           PWEOF
           node probe-stealth.js
 
-      - name: Test H.3 — Playwright stealth + homepage-first warmup (collect Imperva cookies, then fetch JSON)
+      - name: Test H.3 — Playwright stealth + homepage warmup + in-browser fetch
         run: |
-          echo "=== Coles homepage → cookie warmup → _next/data ==="
+          echo "=== Coles homepage → cookie warmup → in-browser fetch _next/data ==="
           set +e
           cd /tmp/pw
           cat > probe-warmup.js <<'PWEOF'
@@ -161,26 +161,65 @@ jobs:
             const page = await ctx.newPage()
             console.log('Step 1: warming up via homepage...')
             const homeResp = await page.goto('https://www.coles.com.au/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-            console.log(`  homepage HTTP ${homeResp.status()}, waiting 3s for Imperva JS...`)
-            await page.waitForTimeout(3000)
+            console.log(`  homepage HTTP ${homeResp.status()}, waiting 5s for Imperva JS challenge to complete...`)
+            await page.waitForTimeout(5000)
             const cookies = await ctx.cookies('https://www.coles.com.au')
-            console.log(`  collected ${cookies.length} cookies:`, cookies.map(c => c.name).join(', '))
-            console.log('Step 2: fetching _next/data with warm session...')
+            console.log(`  collected ${cookies.length} cookies, key ones:`, cookies.filter(c => /incap|visid|nlbi/i.test(c.name)).map(c => c.name).join(', '))
+
+            console.log('Step 2: fetching _next/data with warm session via in-browser fetch...')
             const url = `https://www.coles.com.au/_next/data/${process.env.BUILD_ID}/en/browse/dairy-eggs-fridge.json?slug=dairy-eggs-fridge&page=1`
             const t0 = Date.now()
-            const resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 })
-            const body = await page.evaluate(() => document.body.innerText)
-            console.log(`HTTP ${resp.status()} | ${body.length} bytes | ${(Date.now()-t0)/1000}s`)
-            console.log('First 300:', body.slice(0, 300))
+            const result = await page.evaluate(async (u) => {
+              const r = await fetch(u, { headers: { 'Accept': 'application/json' } })
+              const text = await r.text()
+              return { status: r.status, contentType: r.headers.get('content-type'), length: text.length, body: text.slice(0, 500) }
+            }, url)
+            console.log(`HTTP ${result.status} | content-type=${result.contentType} | ${result.length} bytes | ${(Date.now()-t0)/1000}s`)
+            console.log('First 500:', result.body)
             try {
-              const d = JSON.parse(body)
+              const d = JSON.parse(result.body.length === result.length ? result.body : '')
               const r = d?.pageProps?.searchResults?.results || []
-              console.log('Product count:', r.filter(p => p._type === 'PRODUCT').length)
-            } catch (e) { console.log('Not valid JSON (likely Imperva challenge page)') }
+              console.log('Product count (truncated body — only useful if length matched):', r.filter(p => p._type === 'PRODUCT').length)
+            } catch (e) { console.log('First 500 not parseable on its own (truncated or non-JSON)') }
+            console.log(`Verdict: ${result.length > 100000 ? 'LIKELY REAL JSON (>100KB)' : result.length < 2000 ? 'IMPERVA CHALLENGE PAGE (~1KB)' : 'AMBIGUOUS'}`)
             await browser.close()
           })().catch(e => { console.error('FAIL:', e.message); process.exit(0) })
           PWEOF
           node probe-warmup.js
+
+      - name: Test H.4 — Playwright stealth, navigate browse page (not raw JSON URL), extract products
+        run: |
+          echo "=== Coles /browse/dairy-eggs-fridge page rendered, then scrape ==="
+          set +e
+          cd /tmp/pw
+          cat > probe-page.js <<'PWEOF'
+          const { chromium } = require('playwright-extra')
+          const stealth = require('puppeteer-extra-plugin-stealth')()
+          chromium.use(stealth)
+          ;(async () => {
+            const browser = await chromium.launch({ headless: true })
+            const ctx = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              viewport: { width: 1280, height: 800 },
+              locale: 'en-AU',
+            })
+            const page = await ctx.newPage()
+            const t0 = Date.now()
+            const resp = await page.goto('https://www.coles.com.au/browse/dairy-eggs-fridge', { waitUntil: 'domcontentloaded', timeout: 30000 })
+            console.log(`Navigate HTTP ${resp.status()}, waiting for product tiles...`)
+            await page.waitForTimeout(5000)
+            const productCount = await page.evaluate(() => {
+              const data = document.querySelector('script#__NEXT_DATA__')
+              if (!data) return { error: 'no __NEXT_DATA__ script' }
+              const parsed = JSON.parse(data.textContent)
+              const results = parsed?.props?.pageProps?.searchResults?.results || []
+              return { count: results.filter(p => p._type === 'PRODUCT').length, sample: results.slice(0, 2).map(p => p.name) }
+            })
+            console.log(`__NEXT_DATA__ extraction in ${(Date.now()-t0)/1000}s:`, JSON.stringify(productCount))
+            await browser.close()
+          })().catch(e => { console.error('FAIL:', e.message); process.exit(0) })
+          PWEOF
+          node probe-page.js
 
       - name: Test reference — Render proxy (control, known working)
         run: |
