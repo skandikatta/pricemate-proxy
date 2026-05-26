@@ -2,15 +2,58 @@ const { upsertProducts, insertPriceChanges, close } = require('./db')
 const PROXY = process.env.PROXY_URL || 'https://pricemate-proxy.onrender.com'
 const MIN_EXPECTED_PRODUCTS = 100
 
+// Curated category list. The display title (apiTitle) is the stable lookup key
+// against /api/coles/categories — slugs occasionally rotate (household →
+// cleaning-laundry); titles don't. fallbackSlug is used if discovery degrades.
+const CATEGORIES = [
+  { apiTitle: 'Dairy, Eggs & Fridge',    fallbackSlug: 'dairy-eggs-fridge' },
+  { apiTitle: 'Fruit & Vegetables',      fallbackSlug: 'fruit-vegetables' },
+  { apiTitle: 'Meat & Seafood',          fallbackSlug: 'meat-seafood' },
+  { apiTitle: 'Pantry',                  fallbackSlug: 'pantry' },
+  { apiTitle: 'Drinks',                  fallbackSlug: 'drinks' },
+  { apiTitle: 'Frozen',                  fallbackSlug: 'frozen' },
+  { apiTitle: 'Bakery',                  fallbackSlug: 'bakery' },
+  { apiTitle: 'Health & Beauty',         fallbackSlug: 'health-beauty' },
+  { apiTitle: 'Baby',                    fallbackSlug: 'baby' },
+  { apiTitle: 'Pet',                     fallbackSlug: 'pet' },
+  { apiTitle: 'Deli',                    fallbackSlug: 'deli' },
+  { apiTitle: 'Cleaning & Laundry',      fallbackSlug: 'cleaning-laundry' },
+  { apiTitle: 'Chips & Chocolate',       fallbackSlug: 'chips-chocolates-snacks' },
+  { apiTitle: 'Dietary & World Foods',   fallbackSlug: 'dietary-world-foods' },
+  { apiTitle: 'Home & Garden',           fallbackSlug: 'home-garden' },
+]
+
+async function resolveCategories() {
+  try {
+    const r = await fetch(`${PROXY}/api/coles/categories`)
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const { categories: api } = await r.json()
+    if (!Array.isArray(api) || api.length < 10) throw new Error(`only ${api?.length || 0} categories from proxy`)
+    const apiMap = new Map(api.map(c => [c.title, c.slug]))
+
+    let rotated = 0, missing = 0
+    const resolved = CATEGORIES.map(c => {
+      const currentSlug = apiMap.get(c.apiTitle)
+      if (currentSlug && currentSlug !== c.fallbackSlug) {
+        console.log(`  [cat rotated] ${c.apiTitle}: ${c.fallbackSlug} → ${currentSlug}`)
+        rotated++
+      } else if (!currentSlug) {
+        console.warn(`  [cat missing in API] ${c.apiTitle} — using fallback ${c.fallbackSlug}`)
+        missing++
+      }
+      return currentSlug || c.fallbackSlug
+    })
+    console.log(`  Resolved ${resolved.length} categories via discovery (${rotated} rotated, ${missing} missing → fallback)`)
+    return resolved
+  } catch (e) {
+    console.warn(`  Category discovery failed (${e.message}) — using hardcoded fallback list`)
+    return CATEGORIES.map(c => c.fallbackSlug)
+  }
+}
+
 async function scrapeColes() {
   console.log('=== COLES (via Render proxy) ===')
-  const categories = [
-    'dairy-eggs-fridge', 'fruit-vegetables', 'meat-seafood', 'pantry',
-    'drinks', 'frozen', 'bakery',
-    'health-beauty', 'baby', 'pet', 'deli',
-    'cleaning-laundry', 'chips-chocolates-snacks', 'dietary-world-foods',
-    'home-garden',
-  ]
+  const categories = await resolveCategories()
   let total = 0, changes = 0, failedCategories = []
 
   for (const cat of categories) {

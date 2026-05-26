@@ -155,6 +155,47 @@ app.get('/api/browse/woolworths', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Coles category discovery — extracts the homepage navigation from __NEXT_DATA__.
+// Used by scrape-coles.js to auto-handle slug rotations (e.g. household → cleaning-laundry).
+// Cached for 1h since the homepage doesn't change often.
+let colesCategories = null
+let colesCategoriesTime = 0
+
+function walkFor(obj, key) {
+  if (!obj || typeof obj !== 'object') return null
+  if (Array.isArray(obj[key])) return obj[key]
+  for (const v of Object.values(obj)) {
+    const r = walkFor(v, key)
+    if (r) return r
+  }
+  return null
+}
+
+app.get('/api/coles/categories', async (req, res) => {
+  try {
+    if (colesCategories && Date.now() - colesCategoriesTime < 3600000) {
+      return res.json({ categories: colesCategories, cached: true })
+    }
+    const html = await fetch(COLES_BASE, { headers: { 'User-Agent': UA } }).then(r => r.text())
+    const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/)
+    if (!match) return res.status(502).json({ error: 'No __NEXT_DATA__ found in homepage' })
+    const data = JSON.parse(match[1])
+    const items = walkFor(data.props?.pageProps, 'categoryItems') || []
+    const categories = items
+      .filter(i => /^https?:\/\/[^/]*coles\.com\.au\/browse\/[a-z0-9-]+\/?$/.test(i.linkUrl || '')
+                || /^\/browse\/[a-z0-9-]+\/?$/.test(i.linkUrl || ''))
+      .map(i => ({
+        title: i.title,
+        slug: i.linkUrl.replace(/^https?:\/\/[^/]*coles\.com\.au/, '').replace(/^\/browse\//, '').replace(/\/$/, ''),
+      }))
+      .filter(c => c.slug && c.title)
+    if (categories.length < 10) return res.status(502).json({ error: `Only ${categories.length} categories extracted` })
+    colesCategories = categories
+    colesCategoriesTime = Date.now()
+    res.json({ categories, cached: false })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 app.get('/health', (req, res) => res.json({ status: 'ok', buildId }))
 
 app.listen(PORT, () => console.log(`Proxy running on port ${PORT}`))
