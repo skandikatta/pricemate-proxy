@@ -104,7 +104,7 @@ async function main() {
         continue
       }
       for (const p of products) {
-        allProducts.push({ store: 'aldi', product_id: p.productId, name: p.name, brand: p.brand, size: null, category: cat.name, image: p.image })
+        allProducts.push({ store: 'aldi', product_id: p.productId, name: p.name, brand: p.brand, size: p.size || null, category: cat.name, image: p.image })
         allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: null, is_on_special: false })
       }
       console.log(` ${products.length}`)

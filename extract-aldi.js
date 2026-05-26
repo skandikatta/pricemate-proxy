@@ -2,6 +2,30 @@
 // Tries multiple strategies in order. If the primary regex fails,
 // falls back to heuristics that are more resilient to HTML changes.
 
+// Aldi serves HTML with un-decoded entities (e.g. "Goat&#39;s" instead of "Goat's").
+// Decoded names match Coles/Woolies which arrive from JSON pre-decoded.
+function decodeEntities(s) {
+  if (!s) return s
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
+}
+
+// Parse "200g" / "1L" / "12 Pack" out of a product name. Matches the convention
+// Coles and Woolies store sizes in, so the cross-store matcher can bucket them.
+function parseSizeFromName(name) {
+  if (!name) return null
+  const m = name.match(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l|litre|liter|pack|pk|each|ea)\b/i)
+  return m ? (m[1] + m[2]).toLowerCase() : null
+}
+
 const STRATEGIES = [
   // Strategy 1: Current structure (May 2026)
   {
@@ -12,7 +36,9 @@ const STRATEGIES = [
       const prices = [...html.matchAll(/base-price__regular"><span>\$([\d.]+)/g)].map(m => parseFloat(m[1]))
       const images = [...html.matchAll(/product-tile__picture"><img[^>]*src="([^"]+)"/g)].map(m => m[1])
       const brands = [...html.matchAll(/data-test="product-tile__brandname"[^>]*><p[^>]*>([^<]+)/g)].map(m => m[1].trim())
-      return { ids, names, prices, images, brands }
+      const units  = [...html.matchAll(/data-test="product-tile__unit-of-measurement"[^>]*>(?:<[^>]*>)*([^<]+)/g)].map(m => m[1].trim())
+      const sizes = names.map((n, i) => parseSizeFromName(n) || (units[i] ? units[i].toLowerCase().replace(/\s+/g, '') : null))
+      return { ids, names, prices, images, brands, sizes }
     }
   },
   // Strategy 2: Generic product tile with aria-labels (resilient to class renames)
@@ -85,7 +111,7 @@ const STRATEGIES = [
  */
 function extractProducts(html) {
   for (const strategy of STRATEGIES) {
-    const { ids, names, prices, images, brands } = strategy.extract(html)
+    const { ids, names, prices, images, brands, sizes } = strategy.extract(html)
     const count = Math.min(ids.length, names.length, prices.length)
     if (count > 0) {
       if (strategy !== STRATEGIES[0]) {
@@ -93,12 +119,14 @@ function extractProducts(html) {
       }
       const products = []
       for (let i = 0; i < count; i++) {
+        const cleanName = decodeEntities(names[i])
         products.push({
           productId: `aldi_${ids[i]}`,
-          name: names[i],
+          name: cleanName,
           price: prices[i],
-          brand: brands[i] || null,
+          brand: brands[i] ? decodeEntities(brands[i]) : null,
           image: images[i] || null,
+          size: (sizes && sizes[i]) || parseSizeFromName(cleanName) || null,
         })
       }
       return products
