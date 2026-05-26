@@ -94,13 +94,22 @@ async function scrapeWoolworths() {
   } else if (total < MIN_EXPECTED_PRODUCTS) {
     console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+).`)
   }
+
+  return { total, changes, failedDepts }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 console.log(`Woolworths scrape started: ${new Date().toISOString()}`)
 scrapeWoolworths()
-  .then(() => { console.log(`Woolworths scrape complete: ${new Date().toISOString()}`); return close() })
+  .then((result) => {
+    console.log(`Woolworths scrape complete: ${new Date().toISOString()}`)
+    if (result?.failedDepts?.length > 0) {
+      console.error(`FAIL: ${result.failedDepts.length} departments did not complete: ${result.failedDepts.join(', ')}`)
+      process.exitCode = 1
+    }
+    return close()
+  })
   .catch(e => {
     const external = ['fetch failed', 'ECONNREFUSED', 'ETIMEDOUT', 'HTTP', 'cookies', 'Woolworths']
     const isExternal = external.some(msg => e.message?.includes(msg))

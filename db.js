@@ -22,64 +22,13 @@ function normalizeName(name) {
     .trim()
 }
 
-/**
- * Smart upsert: if a product's ID changed but name+store match an existing record,
- * migrate the old ID to the new one (preserving price history).
- */
+// Postgres caps parameters at 65535 per statement (16-bit). 8 cols × 8000 rows = 64000.
+const MAX_UPSERT_BATCH = 8000
+
 async function upsertProducts(products) {
   if (!products.length) return
 
-  const store = products[0].store
-
-  // Get existing products for this store in one query
-  const { rows: existing } = await pool.query(
-    'SELECT product_id, name FROM products WHERE store = $1',
-    [store]
-  )
-
-  // Build lookup: normalized name → old product_id
-  const nameToId = new Map()
-  for (const row of existing) {
-    nameToId.set(normalizeName(row.name), row.product_id)
-  }
-
-  // Also build id set for quick "already exists" check
-  const existingIds = new Set(existing.map(r => r.product_id))
-
-  let migrated = 0
-
-  for (const p of products) {
-    const normalName = normalizeName(p.name)
-    const oldId = nameToId.get(normalName)
-
-    if (oldId && oldId !== p.product_id && !existingIds.has(p.product_id)) {
-      // Same product, different ID → migrate
-      await pool.query(
-        'UPDATE products SET product_id = $1 WHERE store = $2 AND product_id = $3',
-        [p.product_id, store, oldId]
-      )
-      await pool.query(
-        'UPDATE price_history SET product_id = $1 WHERE store = $2 AND product_id = $3',
-        [p.product_id, store, oldId]
-      )
-      // Update product_groups too
-      const col = store === 'coles' ? 'coles_id' : store === 'woolworths' ? 'woolworths_id' : 'aldi_id'
-      await pool.query(
-        `UPDATE product_groups SET ${col} = $1 WHERE ${col} = $2`,
-        [p.product_id, oldId]
-      )
-      existingIds.delete(oldId)
-      existingIds.add(p.product_id)
-      nameToId.set(normalName, p.product_id)
-      migrated++
-    }
-  }
-
-  if (migrated > 0) {
-    console.log(`  [ID migration] ${migrated} products had ID changes — history preserved`)
-  }
-
-  // Now do the normal upsert (deduplicate by product_id first)
+  // Dedupe by product_id (same product can appear in multiple categories within one scrape)
   const seen = new Set()
   const deduped = products.filter(p => {
     if (seen.has(p.product_id)) return false
@@ -87,16 +36,19 @@ async function upsertProducts(products) {
     return true
   })
 
-  const values = deduped.map((p, i) => {
-    const base = i * 8
-    return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`
-  }).join(',')
-  const params = deduped.flatMap(p => [p.store, p.product_id, p.name, p.brand || null, p.size || null, p.category || null, p.image || null, p.barcode || null])
-  await pool.query(
-    `INSERT INTO products (store,product_id,name,brand,size,category,image,barcode) VALUES ${values}
-     ON CONFLICT (store,product_id) DO UPDATE SET name=EXCLUDED.name, brand=EXCLUDED.brand, size=EXCLUDED.size, category=EXCLUDED.category, image=EXCLUDED.image, barcode=COALESCE(EXCLUDED.barcode, products.barcode)`,
-    params
-  )
+  for (let i = 0; i < deduped.length; i += MAX_UPSERT_BATCH) {
+    const batch = deduped.slice(i, i + MAX_UPSERT_BATCH)
+    const values = batch.map((_, j) => {
+      const base = j * 8
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`
+    }).join(',')
+    const params = batch.flatMap(p => [p.store, p.product_id, p.name, p.brand || null, p.size || null, p.category || null, p.image || null, p.barcode || null])
+    await pool.query(
+      `INSERT INTO products (store,product_id,name,brand,size,category,image,barcode) VALUES ${values}
+       ON CONFLICT (store,product_id) DO UPDATE SET name=EXCLUDED.name, brand=EXCLUDED.brand, size=EXCLUDED.size, category=EXCLUDED.category, image=EXCLUDED.image, barcode=COALESCE(EXCLUDED.barcode, products.barcode)`,
+      params
+    )
+  }
 }
 
 async function insertPriceChanges(prices) {
@@ -121,16 +73,21 @@ async function insertPriceChanges(prices) {
 
   if (!changed.length) return 0
 
-  const values = changed.map((p, i) => {
-    const base = i * 5
-    return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5})`
-  }).join(',')
-  const params = changed.flatMap(p => [p.store, p.product_id, p.price, p.was_price || null, p.is_on_special || false])
-  await pool.query(
-    `INSERT INTO price_history (store,product_id,price,was_price,is_on_special) VALUES ${values}
-     ON CONFLICT (store,product_id,scraped_at) DO NOTHING`,
-    params
-  )
+  // 5 cols × 13000 rows = 65000, safely under the 65535 placeholder cap.
+  const MAX_PRICE_BATCH = 13000
+  for (let i = 0; i < changed.length; i += MAX_PRICE_BATCH) {
+    const batch = changed.slice(i, i + MAX_PRICE_BATCH)
+    const values = batch.map((_, j) => {
+      const base = j * 5
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5})`
+    }).join(',')
+    const params = batch.flatMap(p => [p.store, p.product_id, p.price, p.was_price || null, p.is_on_special || false])
+    await pool.query(
+      `INSERT INTO price_history (store,product_id,price,was_price,is_on_special) VALUES ${values}
+       ON CONFLICT (store,product_id,scraped_at) DO NOTHING`,
+      params
+    )
+  }
   return changed.length
 }
 

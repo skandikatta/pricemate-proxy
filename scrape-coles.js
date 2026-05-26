@@ -59,13 +59,22 @@ async function scrapeColes() {
   } else if (total < MIN_EXPECTED_PRODUCTS) {
     console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+).`)
   }
+
+  return { total, changes, failedCategories }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 console.log(`Coles scrape started: ${new Date().toISOString()}`)
 scrapeColes()
-  .then(() => { console.log(`Coles scrape complete: ${new Date().toISOString()}`); return close() })
+  .then((result) => {
+    console.log(`Coles scrape complete: ${new Date().toISOString()}`)
+    if (result?.failedCategories?.length > 0) {
+      console.error(`FAIL: ${result.failedCategories.length} categories did not complete: ${result.failedCategories.join(', ')}`)
+      process.exitCode = 1
+    }
+    return close()
+  })
   .catch(e => {
     const external = ['fetch failed', 'ECONNREFUSED', 'ETIMEDOUT', 'HTTP', 'proxy', 'Render']
     const isExternal = external.some(msg => e.message?.includes(msg))

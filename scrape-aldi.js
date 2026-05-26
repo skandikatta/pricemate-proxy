@@ -138,11 +138,20 @@ async function main() {
   await upsertProducts(allProducts)
   const changes = await insertPriceChanges(allPrices)
   console.log(`Done! ${allProducts.length} products, ${changes} price changes`)
+
+  return { total: allProducts.length, changes, failedCategories }
 }
 
 console.log(`Aldi scrape started: ${new Date().toISOString()}`)
 main()
-  .then(() => { console.log(`Aldi scrape complete: ${new Date().toISOString()}`); return close() })
+  .then((result) => {
+    console.log(`Aldi scrape complete: ${new Date().toISOString()}`)
+    if (result?.failedCategories?.length > 0) {
+      console.error(`FAIL: ${result.failedCategories.length} categories did not complete: ${result.failedCategories.join(', ')}`)
+      process.exitCode = 1
+    }
+    return close()
+  })
   .catch(e => {
     // Classify: external (site changed) vs internal (our bug)
     const external = [
