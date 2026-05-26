@@ -1,6 +1,16 @@
 # Price History Refactor — Bug + Options + Decisions
 
-**Status:** Open. Decide later. No code changes yet.
+**Status:** ✅ **RESOLVED 2026-05-26 via Option B** (commit `01b2755`).
+- Deleted the `upsertProducts` ID-migration block entirely
+- Renamed vendor_ids now treated as new products
+- Verified live: Coles scrape `26436156691` completed all 15 categories, zero `duplicate key` errors
+- pg_dump backup: `backups/pre-option-b-20260526T061603Z.dump` (local + on VM `/var/lib/postgresql/backups/`)
+- Audit before stripping: 896 normalized-name duplicate groups in Coles alone — past "successful" migrations were silently merging unrelated SKUs, confirming Option B was the right call. Option C (internal-UUID) deferred per recommendation; only revisit if prediction telemetry shows fragmentation hurts.
+
+Historical analysis below preserved for context.
+
+---
+
 **Origin:** 2026-05-25 scrape run https://github.com/skandikatta/pricemate-proxy/actions/runs/26418284219
 **Affected categories that day:** `dairy-eggs-fridge`, `fruit-vegetables`, `deli`, `chips-chocolates-snacks` (4 of 15 failed)
 
