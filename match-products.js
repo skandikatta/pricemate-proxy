@@ -139,18 +139,34 @@ function matchLayer1(products, existingMatched) {
   return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
 }
 
+// Bucket products by sizeNorm for O(1) candidate lookup.
+// Replaces the O(N*M) double-loop in Layer 2/3/4 with O(N + candidates-per-size).
+// Without this, Layer 2 on 22K Coles × 52K Woolworths = 1.18B iterations
+// took 50+ minutes in production. With bucketing it's seconds.
+function bucketBySize(list) {
+  const bySize = new Map()
+  for (const p of list) {
+    if (!p.sizeNorm) continue
+    if (!bySize.has(p.sizeNorm)) bySize.set(p.sizeNorm, [])
+    bySize.get(p.sizeNorm).push(p)
+  }
+  return bySize
+}
+
 function matchLayer2(products, existingMatched) {
   // Fuzzy: Levenshtein < 3 on core name + same size
   const matched = new Set(existingMatched)
   const groups = []
+  const wwBySize = bucketBySize(products.woolworths)
 
   for (const cp of products.coles) {
     if (matched.has(`coles_${cp.product_id}`)) continue
     if (!cp.sizeNorm) continue
+    const candidates = wwBySize.get(cp.sizeNorm)
+    if (!candidates) continue
 
-    for (const wp of products.woolworths) {
+    for (const wp of candidates) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
-      if (cp.sizeNorm !== wp.sizeNorm) continue
       if (levenshtein(cp.core, wp.core) <= 3 && cp.core.length > 5) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
@@ -167,14 +183,16 @@ function matchLayer3(products, existingMatched) {
   const matched = new Set(existingMatched)
   const groups = []
   const storeBrands = new Set(['coles', 'woolworths', 'woolworths free from', 'woolworths essentials', 'woolworths macro', 'coles simply', 'coles finest', 'coles nature\'s kitchen'])
+  const wwBySize = bucketBySize(products.woolworths)
 
   for (const cp of products.coles) {
     if (matched.has(`coles_${cp.product_id}`)) continue
     if (!cp.sizeNorm) continue
+    const candidates = wwBySize.get(cp.sizeNorm)
+    if (!candidates) continue
 
-    for (const wp of products.woolworths) {
+    for (const wp of candidates) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
-      if (cp.sizeNorm !== wp.sizeNorm) continue
       // Brand check (tightened 2026-05-26 — closes the "Bega cheese" loophole):
       //   Reject if both sides have non-empty brands that DIFFER, UNLESS both are
       //   store brands (Coles vs Woolworths house brand of the same generic
@@ -184,11 +202,19 @@ function matchLayer3(products, existingMatched) {
       //   Woolworths Bega-brand cheese.
       const cb = normalize(cp.brand || '')
       const wb = normalize(wp.brand || '')
+      let bothStoreBrand = false
       if (cb && wb && cb !== wb) {
-        const bothStoreBrand = storeBrands.has(cb) && storeBrands.has(wb)
+        bothStoreBrand = storeBrands.has(cb) && storeBrands.has(wb)
         if (!bothStoreBrand) continue
+      } else if (cb && wb && cb === wb) {
+        bothStoreBrand = storeBrands.has(cb)
       }
-      if (tokenSortRatio(cp.normalized, wp.normalized) >= 0.80) {
+      // For Coles ↔ Woolworths store-brand matches we relax the token threshold
+      // because the brand-name tokens differ ("australian ... milk" vs
+      // "woolworths ... milk uht") and drag the sort-ratio down even though the
+      // product is the same. Veto already guarantees both sides are store brands.
+      const threshold = bothStoreBrand ? 0.65 : 0.80
+      if (tokenSortRatio(cp.normalized, wp.normalized) >= threshold) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
         matched.add(`woolworths_${wp.product_id}`)
@@ -206,25 +232,27 @@ function matchLayer4(products, existingMatched) {
   const matched = new Set(existingMatched)
   const groups = []
   const storeBrands = new Set(['coles', 'woolworths', 'woolworths free from', 'woolworths essentials', 'woolworths macro', 'coles simply', 'coles finest', 'coles nature\'s kitchen', ''])
+  const colesBySize = bucketBySize(products.coles)
+  const wwBySize = bucketBySize(products.woolworths)
 
   for (const ap of products.aldi) {
     if (matched.has(`aldi_${ap.product_id}`)) continue
     if (!ap.sizeNorm) continue
 
     let bestColes = null, bestWW = null
+    const colesCandidates = colesBySize.get(ap.sizeNorm) || []
 
-    for (const cp of products.coles) {
+    for (const cp of colesCandidates) {
       if (matched.has(`coles_${cp.product_id}`)) continue
-      if (cp.sizeNorm !== ap.sizeNorm) continue
       const cb = normalize(cp.brand || '')
       // Only match to store-brand or brandless Coles products
       if (cb && !storeBrands.has(cb)) continue
       if (tokenSortRatio(ap.core, cp.core) >= 0.75) { bestColes = cp; break }
     }
 
-    for (const wp of products.woolworths) {
+    const wwCandidates = wwBySize.get(ap.sizeNorm) || []
+    for (const wp of wwCandidates) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
-      if (wp.sizeNorm !== ap.sizeNorm) continue
       const wb = normalize(wp.brand || '')
       if (wb && !storeBrands.has(wb)) continue
       if (tokenSortRatio(ap.core, wp.core) >= 0.75) { bestWW = wp; break }
