@@ -3,10 +3,61 @@ const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
 const MIN_EXPECTED_PRODUCTS = 100
 
+// Curated department list. The display name (apiName) is the stable lookup key —
+// IDs rotate every few months; names rarely change. fallbackId is used if the
+// PiesCategoriesWithSpecials endpoint is unreachable or doesn't list this dept.
+const DEPARTMENTS = [
+  { name: 'fruit-veg',         apiName: 'Fruit & Veg',              fallbackId: '1-E5BEE36E' },
+  { name: 'bakery',            apiName: 'Bakery',                   fallbackId: '1_DEB537E'  },
+  { name: 'meat-seafood-deli', apiName: 'Poultry, Meat & Seafood',  fallbackId: '1_D5A2236'  },
+  { name: 'dairy-eggs-fridge', apiName: 'Dairy, Eggs & Fridge',     fallbackId: '1_6E4F4E4'  },
+  { name: 'pantry',            apiName: 'Pantry',                   fallbackId: '1_39FD49C'  },
+  { name: 'frozen',            apiName: 'Freezer',                  fallbackId: '1_ACA2FC2'  },
+  { name: 'drinks',            apiName: 'Drinks',                   fallbackId: '1_5AF3A0A'  },
+  { name: 'health-beauty',     apiName: 'Personal Care',            fallbackId: '1_894D0A8'  },
+  { name: 'household',         apiName: 'Cleaning & Maintenance',   fallbackId: '1_2432B58'  },
+  { name: 'baby',              apiName: 'Baby',                     fallbackId: '1_717A94B'  },
+  { name: 'pet',               apiName: 'Pet',                      fallbackId: '1_61D6FEB'  },
+  { name: 'front-of-store',    apiName: 'Front of Store',           fallbackId: '1_B63CF9E'  },
+]
+
 async function getWoolworthsCookies() {
   const res = await fetch(`${WOOLWORTHS_BASE}/shop/browse/fruit-veg`, { headers: { 'User-Agent': UA }, redirect: 'manual' })
   const setCookies = res.headers.getSetCookie?.() || []
   return setCookies.map(c => c.split(';')[0]).join('; ')
+}
+
+async function resolveDepartments() {
+  try {
+    const res = await fetch(`${WOOLWORTHS_BASE}/apis/ui/PiesCategoriesWithSpecials`, {
+      headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    const apiMap = new Map()
+    for (const c of data.Categories || []) {
+      if (c.NodeLevel === 1 && c.Description && c.NodeId) apiMap.set(c.Description, c.NodeId)
+    }
+    if (apiMap.size < 10) throw new Error(`only ${apiMap.size} top-level depts from API`)
+
+    let rotated = 0, missing = 0
+    const resolved = DEPARTMENTS.map(d => {
+      const currentId = apiMap.get(d.apiName)
+      if (currentId && currentId !== d.fallbackId) {
+        console.log(`  [dept rotated] ${d.apiName}: ${d.fallbackId} → ${currentId}`)
+        rotated++
+      } else if (!currentId) {
+        console.warn(`  [dept missing in API] ${d.apiName} — using fallback ${d.fallbackId}`)
+        missing++
+      }
+      return { id: currentId || d.fallbackId, name: d.name }
+    })
+    console.log(`  Resolved ${resolved.length} departments via discovery (${rotated} rotated, ${missing} missing → fallback)`)
+    return resolved
+  } catch (e) {
+    console.warn(`  Department discovery failed (${e.message}) — using hardcoded fallback list`)
+    return DEPARTMENTS.map(d => ({ id: d.fallbackId, name: d.name }))
+  }
 }
 
 async function scrapeWoolworths() {
@@ -19,20 +70,7 @@ async function scrapeWoolworths() {
   }
   console.log('Cookies obtained ✓')
 
-  const departments = [
-    { id: '1-E5BEE36E', name: 'fruit-veg' },
-    { id: '1_DEB537E', name: 'bakery' },
-    { id: '1_D5A2236', name: 'meat-seafood-deli' },
-    { id: '1_6E4F4E4', name: 'dairy-eggs-fridge' },
-    { id: '1_39FD49C', name: 'pantry' },
-    { id: '1_ACA2FC2', name: 'frozen' },
-    { id: '1_5AF3A0A', name: 'drinks' },
-    { id: '1_894D0A8', name: 'health-beauty' },
-    { id: '1_2432B58', name: 'household' },
-    { id: '1_717A94B', name: 'baby' },
-    { id: '1_61D6FEB', name: 'pet' },
-    { id: '1_B63CF9E', name: 'front-of-store' },
-  ]
+  const departments = await resolveDepartments()
   let total = 0, changes = 0, failedDepts = []
 
   for (const dept of departments) {
