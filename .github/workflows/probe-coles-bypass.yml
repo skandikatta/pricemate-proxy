@@ -74,6 +74,114 @@ jobs:
           echo "Incapsula block-page signature count:"
           grep -ci "incapsula incident\|request unsuccessful" /tmp/chrome_home.html || true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Test H.1 — Playwright plain headless Chromium from GH Actions
+        run: |
+          echo "=== Coles _next/data, Playwright plain headless ==="
+          set +e
+          mkdir -p /tmp/pw && cd /tmp/pw
+          npm init -y >/dev/null 2>&1
+          npm install playwright@1.49 >/dev/null 2>&1
+          npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > probe.js <<'PWEOF'
+          const { chromium } = require('playwright')
+          ;(async () => {
+            const browser = await chromium.launch({ headless: true })
+            const ctx = await browser.newContext()
+            const page = await ctx.newPage()
+            const url = `https://www.coles.com.au/_next/data/${process.env.BUILD_ID}/en/browse/dairy-eggs-fridge.json?slug=dairy-eggs-fridge&page=1`
+            const t0 = Date.now()
+            const resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 })
+            const body = await page.evaluate(() => document.body.innerText)
+            console.log(`HTTP ${resp.status()} | ${body.length} bytes | ${(Date.now()-t0)/1000}s`)
+            console.log('First 300:', body.slice(0, 300))
+            try {
+              const d = JSON.parse(body)
+              const r = d?.pageProps?.searchResults?.results || []
+              console.log('Product count:', r.filter(p => p._type === 'PRODUCT').length)
+            } catch (e) { console.log('Not valid JSON (likely Imperva challenge page)') }
+            await browser.close()
+          })().catch(e => { console.error('FAIL:', e.message); process.exit(0) })
+          PWEOF
+          node probe.js
+
+      - name: Test H.2 — Playwright with stealth plugin
+        run: |
+          echo "=== Coles _next/data, Playwright + puppeteer-extra stealth ==="
+          set +e
+          cd /tmp/pw
+          npm install playwright-extra puppeteer-extra-plugin-stealth >/dev/null 2>&1
+          cat > probe-stealth.js <<'PWEOF'
+          const { chromium } = require('playwright-extra')
+          const stealth = require('puppeteer-extra-plugin-stealth')()
+          chromium.use(stealth)
+          ;(async () => {
+            const browser = await chromium.launch({ headless: true })
+            const ctx = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              viewport: { width: 1280, height: 800 },
+              locale: 'en-AU',
+            })
+            const page = await ctx.newPage()
+            const url = `https://www.coles.com.au/_next/data/${process.env.BUILD_ID}/en/browse/dairy-eggs-fridge.json?slug=dairy-eggs-fridge&page=1`
+            const t0 = Date.now()
+            const resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 })
+            const body = await page.evaluate(() => document.body.innerText)
+            console.log(`HTTP ${resp.status()} | ${body.length} bytes | ${(Date.now()-t0)/1000}s`)
+            console.log('First 300:', body.slice(0, 300))
+            try {
+              const d = JSON.parse(body)
+              const r = d?.pageProps?.searchResults?.results || []
+              console.log('Product count:', r.filter(p => p._type === 'PRODUCT').length)
+            } catch (e) { console.log('Not valid JSON (likely Imperva challenge page)') }
+            await browser.close()
+          })().catch(e => { console.error('FAIL:', e.message); process.exit(0) })
+          PWEOF
+          node probe-stealth.js
+
+      - name: Test H.3 — Playwright stealth + homepage-first warmup (collect Imperva cookies, then fetch JSON)
+        run: |
+          echo "=== Coles homepage → cookie warmup → _next/data ==="
+          set +e
+          cd /tmp/pw
+          cat > probe-warmup.js <<'PWEOF'
+          const { chromium } = require('playwright-extra')
+          const stealth = require('puppeteer-extra-plugin-stealth')()
+          chromium.use(stealth)
+          ;(async () => {
+            const browser = await chromium.launch({ headless: true })
+            const ctx = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              viewport: { width: 1280, height: 800 },
+              locale: 'en-AU',
+            })
+            const page = await ctx.newPage()
+            console.log('Step 1: warming up via homepage...')
+            const homeResp = await page.goto('https://www.coles.com.au/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+            console.log(`  homepage HTTP ${homeResp.status()}, waiting 3s for Imperva JS...`)
+            await page.waitForTimeout(3000)
+            const cookies = await ctx.cookies('https://www.coles.com.au')
+            console.log(`  collected ${cookies.length} cookies:`, cookies.map(c => c.name).join(', '))
+            console.log('Step 2: fetching _next/data with warm session...')
+            const url = `https://www.coles.com.au/_next/data/${process.env.BUILD_ID}/en/browse/dairy-eggs-fridge.json?slug=dairy-eggs-fridge&page=1`
+            const t0 = Date.now()
+            const resp = await page.goto(url, { waitUntil: 'load', timeout: 30000 })
+            const body = await page.evaluate(() => document.body.innerText)
+            console.log(`HTTP ${resp.status()} | ${body.length} bytes | ${(Date.now()-t0)/1000}s`)
+            console.log('First 300:', body.slice(0, 300))
+            try {
+              const d = JSON.parse(body)
+              const r = d?.pageProps?.searchResults?.results || []
+              console.log('Product count:', r.filter(p => p._type === 'PRODUCT').length)
+            } catch (e) { console.log('Not valid JSON (likely Imperva challenge page)') }
+            await browser.close()
+          })().catch(e => { console.error('FAIL:', e.message); process.exit(0) })
+          PWEOF
+          node probe-warmup.js
+
       - name: Test reference — Render proxy (control, known working)
         run: |
           echo "=== Render proxy /api/browse/coles, control ==="
@@ -88,4 +196,7 @@ jobs:
           echo "B.2 _next/data (plain curl)      : see Test B.2 output"
           echo "E.1 _next/data (curl-impersonate): see Test E.1 output"
           echo "E.2 homepage (curl-impersonate)  : see Test E.2 output"
+          echo "H.1 _next/data (Playwright plain): see Test H.1 output"
+          echo "H.2 _next/data (Playwright stealth): see Test H.2 output"
+          echo "H.3 _next/data (stealth + warmup): see Test H.3 output"
           echo "Render proxy (control)           : see reference"
