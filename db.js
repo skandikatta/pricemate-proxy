@@ -106,6 +106,11 @@ async function insertPriceChanges(prices) {
   return changed.length
 }
 
+async function getStoreProductCount(store) {
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM products WHERE store = $1', [store])
+  return rows[0]?.n ?? 0
+}
+
 async function close() { await pool.end() }
 
-module.exports = { upsertProducts, insertPriceChanges, close, normalizeName }
+module.exports = { upsertProducts, insertPriceChanges, close, normalizeName, getStoreProductCount }

@@ -1,6 +1,34 @@
-const { upsertProducts, insertPriceChanges, close } = require('./db')
+const { upsertProducts, insertPriceChanges, close, getStoreProductCount } = require('./db')
 const PROXY = process.env.PROXY_URL || 'https://pricemate-proxy.onrender.com'
 const MIN_EXPECTED_PRODUCTS = 100
+const DEGRADATION_THRESHOLD = 0.70 // alert if today's total < 70% of prior catalog size
+
+// Retry policy for per-page fetches. Imperva blips, Render cold starts, and
+// transient 5xx are common; one bad page shouldn't burn the whole category.
+const MAX_PAGE_ATTEMPTS = 3
+async function fetchWithRetry(url, label) {
+  let lastErr = null
+  for (let attempt = 1; attempt <= MAX_PAGE_ATTEMPTS; attempt++) {
+    try {
+      const r = await fetch(url)
+      if (r.ok) return { ok: true, response: r }
+      // Retry 5xx, fail-fast 4xx.
+      if (r.status >= 500 && attempt < MAX_PAGE_ATTEMPTS) {
+        lastErr = `HTTP ${r.status}`
+        await sleep(1000 * Math.pow(2, attempt - 1))
+        continue
+      }
+      return { ok: false, status: r.status, error: `HTTP ${r.status}` }
+    } catch (e) {
+      lastErr = e.message
+      if (attempt < MAX_PAGE_ATTEMPTS) {
+        await sleep(1000 * Math.pow(2, attempt - 1))
+        continue
+      }
+    }
+  }
+  return { ok: false, error: lastErr || 'unknown' }
+}
 
 // Curated category list. The display title (apiTitle) is the stable lookup key
 // against /api/coles/categories — slugs occasionally rotate (household →
@@ -53,6 +81,8 @@ async function resolveCategories() {
 
 async function scrapeColes() {
   console.log('=== COLES (via Render proxy) ===')
+  const startedAt = Date.now()
+  const priorCatalogCount = await getStoreProductCount('coles').catch(() => null)
   const categories = await resolveCategories()
   let total = 0, changes = 0, failedCategories = []
 
@@ -60,10 +90,10 @@ async function scrapeColes() {
     for (let page = 1; page <= 999; page++) {
       const url = `${PROXY}/api/browse/coles?category=${cat}&page=${page}`
       process.stdout.write(`  ${cat} p${page}...`)
+      const fetched = await fetchWithRetry(url, `${cat} p${page}`)
+      if (!fetched.ok) { console.log(` ${fetched.error} after retries, stopping`); failedCategories.push(cat); break }
       try {
-        const r = await fetch(url)
-        if (!r.ok) { console.log(` HTTP ${r.status}, stopping`); break }
-        const data = await r.json()
+        const data = await fetched.response.json()
         if (data.error) { console.log(` ${data.error}, stopping`); break }
         const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
         if (results.length === 0) { console.log(' empty, done'); break }
@@ -86,16 +116,19 @@ async function scrapeColes() {
         console.log(` ${results.length} products (${changed} changes)`)
         await sleep(500)
       } catch (e) {
-        console.log(` ERROR: ${e.message}`)
+        console.log(` PARSE ERROR: ${e.message}`)
         failedCategories.push(cat)
         break
       }
     }
   }
 
-  if (failedCategories.length > 0) console.warn(`WARNING: Failed categories: ${failedCategories.join(', ')}`)
-  console.log(`\nColes done: ${total} products, ${changes} price changes`)
+  const durationS = Math.round((Date.now() - startedAt) / 1000)
 
+  if (failedCategories.length > 0) console.warn(`WARNING: Failed categories: ${failedCategories.join(', ')}`)
+  console.log(`\nColes done: ${total} products, ${changes} price changes in ${durationS}s`)
+
+  let degraded = false
   if (total === 0) {
     console.warn('WARNING: Zero products scraped. Coles API may have changed or proxy is down.')
     console.warn('Existing DB data preserved.')
@@ -103,7 +136,31 @@ async function scrapeColes() {
     console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+).`)
   }
 
-  return { total, changes, failedCategories }
+  // Degradation alert: if today's scrape is materially smaller than the active
+  // catalog before this run, something is silently broken (Imperva block on a
+  // subset of categories, slug change, etc).
+  if (priorCatalogCount !== null && priorCatalogCount > 0 && total > 0) {
+    const ratio = total / priorCatalogCount
+    if (ratio < DEGRADATION_THRESHOLD) {
+      degraded = true
+      console.error(`DEGRADATION: scraped ${total} vs prior catalog of ${priorCatalogCount} (${(ratio * 100).toFixed(1)}%, threshold ${DEGRADATION_THRESHOLD * 100}%)`)
+    }
+  }
+
+  // One-line JSON summary, grep-friendly for GH Actions log scraping + alerting.
+  const summary = {
+    date: new Date().toISOString().slice(0, 10),
+    store: 'coles',
+    total,
+    changes,
+    failed_categories: failedCategories,
+    duration_s: durationS,
+    prior_catalog_count: priorCatalogCount,
+    degraded,
+  }
+  console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
+
+  return { total, changes, failedCategories, degraded }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -114,6 +171,9 @@ scrapeColes()
     console.log(`Coles scrape complete: ${new Date().toISOString()}`)
     if (result?.failedCategories?.length > 0) {
       console.error(`FAIL: ${result.failedCategories.length} categories did not complete: ${result.failedCategories.join(', ')}`)
+      process.exitCode = 1
+    }
+    if (result?.degraded) {
       process.exitCode = 1
     }
     return close()

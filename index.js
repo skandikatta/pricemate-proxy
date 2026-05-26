@@ -124,8 +124,12 @@ app.get('/api/search', async (req, res) => {
         const data = await r.json()
         const results = data?.pageProps?.searchResults?.results || []
         products.push(...results.filter(p => p._type === 'PRODUCT').slice(0, 12).map(mapColes))
+      } else {
+        console.warn(`[search:coles] non-ok or non-json: HTTP ${r.status} content-type=${r.headers.get('content-type')}`)
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error(`[search:coles] ${e.message}`)
+    }
   }
 
   if (store === 'all' || store === 'woolworths') {
@@ -134,8 +138,12 @@ app.get('/api/search', async (req, res) => {
       if (data?.Products) {
         const wwProducts = data.Products.flatMap(g => g.Products || []).slice(0, 12).map(mapWoolworths)
         products.push(...wwProducts)
+      } else {
+        console.warn('[search:woolworths] no Products in response')
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error(`[search:woolworths] ${e.message}`)
+    }
   }
 
   products.sort((a, b) => (b.isOnSpecial - a.isOnSpecial) || (a.price - b.price))
