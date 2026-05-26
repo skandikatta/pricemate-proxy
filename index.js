@@ -110,42 +110,50 @@ function mapWoolworths(p) {
 }
 
 // --- SEARCH ENDPOINT (both stores) ---
+// Coles + Woolworths fetches are independent — run them in parallel via
+// Promise.all to halve user-facing search latency (each leg is ~0.8-1.5s
+// against the upstream; sequential = sum, parallel = max).
+async function searchColes(q) {
+  try {
+    const id = await getBuildId()
+    const url = `${COLES_BASE}/_next/data/${id}/en/search/products.json?q=${encodeURIComponent(q)}&page=1`
+    const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
+    if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
+      const data = await r.json()
+      const results = data?.pageProps?.searchResults?.results || []
+      return results.filter(p => p._type === 'PRODUCT').slice(0, 12).map(mapColes)
+    }
+    console.warn(`[search:coles] non-ok or non-json: HTTP ${r.status} content-type=${r.headers.get('content-type')}`)
+    return []
+  } catch (e) {
+    console.error(`[search:coles] ${e.message}`)
+    return []
+  }
+}
+
+async function searchWoolworths(q) {
+  try {
+    const data = await woolworthsSearch(q)
+    if (data?.Products) {
+      return data.Products.flatMap(g => g.Products || []).slice(0, 12).map(mapWoolworths)
+    }
+    console.warn('[search:woolworths] no Products in response')
+    return []
+  } catch (e) {
+    console.error(`[search:woolworths] ${e.message}`)
+    return []
+  }
+}
+
 app.get('/api/search', async (req, res) => {
   const q = req.query.q || 'milk'
   const store = req.query.store || 'all'
-  let products = []
 
-  if (store === 'all' || store === 'coles') {
-    try {
-      const id = await getBuildId()
-      const url = `${COLES_BASE}/_next/data/${id}/en/search/products.json?q=${encodeURIComponent(q)}&page=1`
-      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
-      if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
-        const data = await r.json()
-        const results = data?.pageProps?.searchResults?.results || []
-        products.push(...results.filter(p => p._type === 'PRODUCT').slice(0, 12).map(mapColes))
-      } else {
-        console.warn(`[search:coles] non-ok or non-json: HTTP ${r.status} content-type=${r.headers.get('content-type')}`)
-      }
-    } catch (e) {
-      console.error(`[search:coles] ${e.message}`)
-    }
-  }
-
-  if (store === 'all' || store === 'woolworths') {
-    try {
-      const data = await woolworthsSearch(q)
-      if (data?.Products) {
-        const wwProducts = data.Products.flatMap(g => g.Products || []).slice(0, 12).map(mapWoolworths)
-        products.push(...wwProducts)
-      } else {
-        console.warn('[search:woolworths] no Products in response')
-      }
-    } catch (e) {
-      console.error(`[search:woolworths] ${e.message}`)
-    }
-  }
-
+  const [colesProducts, wooliesProducts] = await Promise.all([
+    (store === 'all' || store === 'coles') ? searchColes(q) : Promise.resolve([]),
+    (store === 'all' || store === 'woolworths') ? searchWoolworths(q) : Promise.resolve([]),
+  ])
+  const products = [...colesProducts, ...wooliesProducts]
   products.sort((a, b) => (b.isOnSpecial - a.isOnSpecial) || (a.price - b.price))
   res.json({ products, query: q, total: products.length })
 })
