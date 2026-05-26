@@ -175,10 +175,19 @@ function matchLayer3(products, existingMatched) {
     for (const wp of products.woolworths) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
       if (cp.sizeNorm !== wp.sizeNorm) continue
-      // Brand check: reject if both have specific different brands (neither is a store brand)
+      // Brand check (tightened 2026-05-26 — closes the "Bega cheese" loophole):
+      //   Reject if both sides have non-empty brands that DIFFER, UNLESS both are
+      //   store brands (Coles vs Woolworths house brand of the same generic
+      //   product can legitimately match).
+      //   The previous rule allowed any brand match as long as ONE side was a
+      //   store brand, which falsely paired e.g. Coles store-brand cheese to
+      //   Woolworths Bega-brand cheese.
       const cb = normalize(cp.brand || '')
       const wb = normalize(wp.brand || '')
-      if (cb && wb && cb !== wb && !storeBrands.has(cb) && !storeBrands.has(wb)) continue
+      if (cb && wb && cb !== wb) {
+        const bothStoreBrand = storeBrands.has(cb) && storeBrands.has(wb)
+        if (!bothStoreBrand) continue
+      }
       if (tokenSortRatio(cp.normalized, wp.normalized) >= 0.80) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)

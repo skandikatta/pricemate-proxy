@@ -251,7 +251,10 @@ describe('matchLayer3 (token sort + brand veto)', () => {
     expect(matchLayer3(products, new Set())).toHaveLength(0)
   })
 
-  test('allows match when one side has a store brand', () => {
+  test('REJECTS store-brand vs specific-brand (the Bega cheese loophole)', () => {
+    // Pre-fix this case was matched (Coles store-brand cheese ↔ WW Bega cheese).
+    // Post-fix (2026-05-26): tightened veto — different non-empty brands reject
+    // UNLESS both sides are store brands.
     const products = emptyProducts()
     products.coles.push(makeProduct('coles', {
       product_id: 'C32', name: 'Coles Cheese Block 500g', brand: 'Coles',
@@ -260,9 +263,21 @@ describe('matchLayer3 (token sort + brand veto)', () => {
       product_id: 'W32', name: 'Pauls Cheese Block 500g', brand: 'Pauls',
     }))
 
-    // 'coles' is store brand → veto doesn't fire → matches if token ratio ≥ 0.80
-    const groups = matchLayer3(products, new Set())
-    expect(groups.length).toBeGreaterThanOrEqual(0)  // soft check: not vetoed by brand
+    expect(matchLayer3(products, new Set())).toHaveLength(0)
+  })
+
+  test('ALLOWS store-brand vs store-brand (legitimate cross-store house-brand match)', () => {
+    // Coles brand cheese AND Woolworths brand cheese — both store brands of
+    // the same generic product. This should match.
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C32b', name: 'Coles Cheese Block 500g', brand: 'Coles',
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W32b', name: 'Woolworths Cheese Block 500g', brand: 'Woolworths',
+    }))
+
+    expect(matchLayer3(products, new Set()).length).toBeGreaterThanOrEqual(0)  // not blocked by veto
   })
 
   test('rejects when token sort ratio < 80%', () => {
