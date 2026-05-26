@@ -1,0 +1,91 @@
+name: Probe Coles Bypass Matrix
+
+# One-shot diagnostic: tests whether Coles _next/data is reachable from a
+# GitHub Actions runner via different methods. Auto-runs on push to the
+# probe branch, then exit. Delete the branch after to remove the workflow.
+
+on:
+  push:
+    branches: [probe/coles-bypass]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Show runner IP info
+        run: |
+          echo "=== Runner public IP ==="
+          curl -s https://api.ipify.org && echo
+          echo "=== Reverse DNS ==="
+          curl -s https://api.ipify.org | xargs -I {} sh -c 'nslookup {} 2>&1 | head -5'
+
+      - name: Set buildId
+        run: echo "BUILD_ID=20260519.2-dc6ca4a12a99dc741883de303f8dfa9ced7179b3" >> $GITHUB_ENV
+
+      - name: Test B.1 — plain curl Coles homepage from GH Actions
+        run: |
+          echo "=== Coles homepage, plain curl ==="
+          set +e
+          curl -sS -o /tmp/home.html -w "HTTP %{http_code} | %{size_download} bytes | %{time_total}s\n" -m 20 \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0" \
+            https://www.coles.com.au/
+          echo "buildId in response:"
+          grep -oE '"buildId":"[^"]+"' /tmp/home.html | head -1 || echo "(none — likely blocked)"
+          echo "Incapsula block-page signature count:"
+          grep -ci "incapsula incident\|request unsuccessful" /tmp/home.html || true
+          echo "First 200 bytes of body:"
+          head -c 200 /tmp/home.html; echo
+
+      - name: Test B.2 — plain curl Coles _next/data from GH Actions
+        run: |
+          echo "=== Coles _next/data, plain curl ==="
+          set +e
+          curl -sS -o /tmp/data.json -w "HTTP %{http_code} | %{size_download} bytes | %{time_total}s\n" -m 20 \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0" \
+            -H "Accept: application/json" \
+            "https://www.coles.com.au/_next/data/${BUILD_ID}/en/browse/dairy-eggs-fridge.json?slug=dairy-eggs-fridge&page=1"
+          echo "First 300 bytes:"
+          head -c 300 /tmp/data.json; echo
+          echo "Product count (if valid JSON):"
+          python3 -c "import json; d=json.load(open('/tmp/data.json')); r=d.get('pageProps',{}).get('searchResults',{}).get('results',[]); print(len([x for x in r if x.get('_type')=='PRODUCT']))" 2>&1 | head -2
+
+      - name: Test E.1 — curl-impersonate Chrome 110 from GH Actions
+        run: |
+          echo "=== Coles _next/data, curl-impersonate chrome110 ==="
+          set +e
+          docker pull lwthiker/curl-impersonate:0.5-chrome >/dev/null 2>&1
+          docker run --rm -v /tmp:/tmp --entrypoint sh lwthiker/curl-impersonate:0.5-chrome -c \
+            "curl_chrome110 -s -o /tmp/chrome.json -w 'HTTP %{http_code} | %{size_download} bytes | %{time_total}s\n' -m 20 'https://www.coles.com.au/_next/data/${BUILD_ID}/en/browse/dairy-eggs-fridge.json?slug=dairy-eggs-fridge&page=1'"
+          echo "First 300 bytes:"
+          head -c 300 /tmp/chrome.json; echo
+          echo "Product count (if valid JSON):"
+          python3 -c "import json; d=json.load(open('/tmp/chrome.json')); r=d.get('pageProps',{}).get('searchResults',{}).get('results',[]); print(len([x for x in r if x.get('_type')=='PRODUCT']))" 2>&1 | head -2
+
+      - name: Test E.2 — curl-impersonate Coles homepage
+        run: |
+          echo "=== Coles homepage, curl-impersonate chrome110 ==="
+          set +e
+          docker run --rm -v /tmp:/tmp --entrypoint sh lwthiker/curl-impersonate:0.5-chrome -c \
+            "curl_chrome110 -s -o /tmp/chrome_home.html -w 'HTTP %{http_code} | %{size_download} bytes | %{time_total}s\n' -m 20 'https://www.coles.com.au/'"
+          echo "buildId in response:"
+          grep -oE '"buildId":"[^"]+"' /tmp/chrome_home.html | head -1 || echo "(none)"
+          echo "Incapsula block-page signature count:"
+          grep -ci "incapsula incident\|request unsuccessful" /tmp/chrome_home.html || true
+
+      - name: Test reference — Render proxy (control, known working)
+        run: |
+          echo "=== Render proxy /api/browse/coles, control ==="
+          curl -sS -o /tmp/render.json -w "HTTP %{http_code} | %{size_download} bytes | %{time_total}s\n" -m 30 \
+            "https://pricemate-proxy.onrender.com/api/browse/coles?category=dairy-eggs-fridge&page=1"
+          python3 -c "import json; d=json.load(open('/tmp/render.json')); r=d.get('pageProps',{}).get('searchResults',{}).get('results',[]); print('Render proxy product count:', len([x for x in r if x.get('_type')=='PRODUCT']))" 2>&1 | head -2
+
+      - name: Summary
+        run: |
+          echo "=== SUMMARY ==="
+          echo "B.1 homepage (plain curl)        : see Test B.1 output"
+          echo "B.2 _next/data (plain curl)      : see Test B.2 output"
+          echo "E.1 _next/data (curl-impersonate): see Test E.1 output"
+          echo "E.2 homepage (curl-impersonate)  : see Test E.2 output"
+          echo "Render proxy (control)           : see reference"
