@@ -14,7 +14,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install pg
+      - name: Install runtime + Playwright fallback deps
+        run: npm install pg playwright playwright-extra puppeteer-extra-plugin-stealth
+      - name: Install Chromium (for Playwright fallback)
+        run: npx playwright install --with-deps chromium
       - name: Wake Render proxy
         run: |
           for i in 1 2 3; do

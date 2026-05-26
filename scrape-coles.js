@@ -3,6 +3,15 @@ const PROXY = process.env.PROXY_URL || 'https://pricemate-proxy.onrender.com'
 const MIN_EXPECTED_PRODUCTS = 100
 const DEGRADATION_THRESHOLD = 0.70 // alert if today's total < 70% of prior catalog size
 
+// Playwright fallback is lazy-required only when Render fails — keeps cold-start
+// time down on the happy path. The module ships ~Chromium-sized deps so we don't
+// want to load it eagerly.
+let playwrightFallback = null
+function getPlaywrightFallback() {
+  if (!playwrightFallback) playwrightFallback = require('./playwright-fallback')
+  return playwrightFallback
+}
+
 // Retry policy for per-page fetches. Imperva blips, Render cold starts, and
 // transient 5xx are common; one bad page shouldn't burn the whole category.
 const MAX_PAGE_ATTEMPTS = 3
@@ -86,41 +95,96 @@ async function scrapeColes() {
   const categories = await resolveCategories()
   let total = 0, changes = 0, failedCategories = []
 
+  let usedPlaywright = false
+
   for (const cat of categories) {
-    for (let page = 1; page <= 999; page++) {
-      const url = `${PROXY}/api/browse/coles?category=${cat}&page=${page}`
-      process.stdout.write(`  ${cat} p${page}...`)
-      const fetched = await fetchWithRetry(url, `${cat} p${page}`)
-      if (!fetched.ok) { console.log(` ${fetched.error} after retries, stopping`); failedCategories.push(cat); break }
-      try {
-        const data = await fetched.response.json()
-        if (data.error) { console.log(` ${data.error}, stopping`); break }
-        const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
-        if (results.length === 0) { console.log(' empty, done'); break }
+    // Render is primary (4× faster); Playwright kicks in only when Render
+    // returns errors. Once we switch a category to Playwright we stay on
+    // Playwright for that category — don't flip back mid-pagination.
+    let viaPlaywright = false
 
-        const products = results.map(p => ({
-          store: 'coles', product_id: String(p.id), name: p.name,
-          brand: p.brand || null, size: p.size || null, category: cat,
-          image: p.imageUris?.[0]?.uri ? 'https://productimages.coles.com.au/productimages' + p.imageUris[0].uri : null,
-        }))
+    for (let pageNum = 1; pageNum <= 999; pageNum++) {
+      process.stdout.write(`  ${cat} p${pageNum}${viaPlaywright ? ' [pw]' : ''}...`)
+      let data = null
 
-        const prices = results.map(p => {
-          const pr = p.pricing || {}
-          return { store: 'coles', product_id: String(p.id), price: pr.now || 0, was_price: pr.was || null, is_on_special: pr.onlineSpecial || false }
-        })
-
-        await upsertProducts(products)
-        const changed = await insertPriceChanges(prices)
-        changes += changed
-        total += products.length
-        console.log(` ${results.length} products (${changed} changes)`)
-        await sleep(500)
-      } catch (e) {
-        console.log(` PARSE ERROR: ${e.message}`)
-        failedCategories.push(cat)
-        break
+      if (!viaPlaywright) {
+        const url = `${PROXY}/api/browse/coles?category=${cat}&page=${pageNum}`
+        const fetched = await fetchWithRetry(url, `${cat} p${pageNum}`)
+        if (!fetched.ok) {
+          // Render exhausted retries. If we haven't gotten any pages for this
+          // category yet, try Playwright. If we're mid-pagination, just stop
+          // this category (a partial Render+Playwright stitch isn't worth the
+          // complexity for an edge case).
+          if (pageNum === 1) {
+            console.log(` ${fetched.error} after retries → switching to Playwright fallback`)
+            viaPlaywright = true
+            usedPlaywright = true
+          } else {
+            console.log(` ${fetched.error} mid-category, stopping`)
+            failedCategories.push(cat)
+            break
+          }
+        } else {
+          try {
+            data = await fetched.response.json()
+          } catch (e) {
+            console.log(` PARSE ERROR: ${e.message}`)
+            failedCategories.push(cat)
+            break
+          }
+        }
       }
+
+      if (viaPlaywright) {
+        try {
+          const pw = getPlaywrightFallback()
+          const res = await pw.fetchCategoryPage(cat, pageNum)
+          if (!res.ok) {
+            console.log(` Playwright HTTP ${res.status}, stopping`)
+            failedCategories.push(cat)
+            break
+          }
+          // Imperva sometimes returns 200 with a 1KB challenge body. Detect.
+          if (res.body.length < 2000) {
+            console.log(` Playwright body=${res.body.length}b (Imperva challenge), stopping`)
+            failedCategories.push(cat)
+            break
+          }
+          data = JSON.parse(res.body)
+        } catch (e) {
+          console.log(` Playwright ERROR: ${e.message}`)
+          failedCategories.push(cat)
+          break
+        }
+      }
+
+      if (data.error) { console.log(` ${data.error}, stopping`); break }
+      const results = (data?.pageProps?.searchResults?.results || []).filter(p => p._type === 'PRODUCT')
+      if (results.length === 0) { console.log(' empty, done'); break }
+
+      const products = results.map(p => ({
+        store: 'coles', product_id: String(p.id), name: p.name,
+        brand: p.brand || null, size: p.size || null, category: cat,
+        image: p.imageUris?.[0]?.uri ? 'https://productimages.coles.com.au/productimages' + p.imageUris[0].uri : null,
+      }))
+
+      const prices = results.map(p => {
+        const pr = p.pricing || {}
+        return { store: 'coles', product_id: String(p.id), price: pr.now || 0, was_price: pr.was || null, is_on_special: pr.onlineSpecial || false }
+      })
+
+      await upsertProducts(products)
+      const changed = await insertPriceChanges(prices)
+      changes += changed
+      total += products.length
+      console.log(` ${results.length} products (${changed} changes)`)
+      await sleep(500)
     }
+  }
+
+  // Tear down Playwright if we used it (browser process + Chromium = memory).
+  if (usedPlaywright) {
+    await getPlaywrightFallback().close()
   }
 
   const durationS = Math.round((Date.now() - startedAt) / 1000)
@@ -157,6 +221,7 @@ async function scrapeColes() {
     duration_s: durationS,
     prior_catalog_count: priorCatalogCount,
     degraded,
+    used_playwright_fallback: usedPlaywright,
   }
   console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
 
