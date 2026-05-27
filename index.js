@@ -70,10 +70,10 @@ async function woolworthsBrowse(categoryId, page = 1) {
   return res.json()
 }
 
-async function woolworthsSearch(query) {
+async function woolworthsSearch(query, page = 1) {
   const cookies = await getWoolworthsCookies()
   const body = JSON.stringify({
-    SearchTerm: query, PageNumber: 1, PageSize: 24, SortType: 'TraderRelevance',
+    SearchTerm: query, PageNumber: page, PageSize: 36, SortType: 'TraderRelevance',
     Filters: [], IsSpecial: false, Location: `/shop/search/products?searchTerm=${query}`,
     IsHideEverydayMarketProducts: false, GroupEdmVariants: false, EnableAdReRanking: false
   })
@@ -110,23 +110,40 @@ function mapWoolworths(p) {
 }
 
 // --- SEARCH ENDPOINT (both stores) ---
-// Coles + Woolworths fetches are independent — run them in parallel via
-// Promise.all to halve user-facing search latency (each leg is ~0.8-1.5s
-// against the upstream; sequential = sum, parallel = max).
+// Praveen 2026-05-27: Coles shows 137 results for "milk", Woolies shows 304.
+// We should mirror that — fetch ALL pages (capped) and let the frontend
+// filter/sort. Coles + Woolies upstream calls are independent so we run
+// them in parallel; within each store we fetch page 1, then in parallel
+// fetch pages 2..N up to MAX_PAGES based on the noOfResults header.
+const MAX_PAGES_PER_STORE = 6  // Coles 6×48≈288, Woolies 6×36=216. Plenty for "milk".
+const COLES_PAGE_SIZE = 48
+const WOOLIES_PAGE_SIZE = 36
+
+async function fetchColesPage(q, page, buildId) {
+  const url = `${COLES_BASE}/_next/data/${buildId}/en/search/products.json?q=${encodeURIComponent(q)}&page=${page}`
+  const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
+  if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) {
+    console.warn(`[search:coles] page ${page}: HTTP ${r.status} content-type=${r.headers.get('content-type')}`)
+    return { results: [], total: 0 }
+  }
+  const data = await r.json()
+  const sr = data?.pageProps?.searchResults || {}
+  const results = (sr.results || []).filter(p => p._type === 'PRODUCT')
+  const total = sr.noOfResults || sr.totalResults || sr.totalCount || results.length
+  return { results, total }
+}
+
 async function searchColes(q) {
   try {
     const id = await getBuildId()
-    const url = `${COLES_BASE}/_next/data/${id}/en/search/products.json?q=${encodeURIComponent(q)}&page=1`
-    const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } })
-    if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
-      const data = await r.json()
-      const results = data?.pageProps?.searchResults?.results || []
-      // Bumped 12 → 48 (2026-05-27): matches Coles's own first-page count
-      // for the same search and removes the "only 12 milks?" UX surprise.
-      return results.filter(p => p._type === 'PRODUCT').slice(0, 48).map(mapColes)
-    }
-    console.warn(`[search:coles] non-ok or non-json: HTTP ${r.status} content-type=${r.headers.get('content-type')}`)
-    return []
+    const first = await fetchColesPage(q, 1, id)
+    if (first.results.length === 0) return []
+    const totalPages = Math.min(MAX_PAGES_PER_STORE, Math.ceil(first.total / COLES_PAGE_SIZE))
+    const rest = totalPages > 1
+      ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, i) => fetchColesPage(q, i + 2, id)))
+      : []
+    const all = [first, ...rest].flatMap(p => p.results)
+    return all.map(mapColes)
   } catch (e) {
     console.error(`[search:coles] ${e.message}`)
     return []
@@ -135,13 +152,18 @@ async function searchColes(q) {
 
 async function searchWoolworths(q) {
   try {
-    const data = await woolworthsSearch(q)
-    if (data?.Products) {
-      // Bumped 12 → 48 (2026-05-27) — see Coles searchColes() rationale.
-      return data.Products.flatMap(g => g.Products || []).slice(0, 48).map(mapWoolworths)
-    }
-    console.warn('[search:woolworths] no Products in response')
-    return []
+    const first = await woolworthsSearch(q, 1)
+    if (!first?.Products) return []
+    const firstProducts = first.Products.flatMap(g => g.Products || [])
+    const total = first.SearchResultsCount || first.TotalCount || firstProducts.length
+    const totalPages = Math.min(MAX_PAGES_PER_STORE, Math.ceil(total / WOOLIES_PAGE_SIZE))
+    const rest = totalPages > 1
+      ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, i) => woolworthsSearch(q, i + 2)))
+      : []
+    const all = [first, ...rest]
+      .filter(Boolean)
+      .flatMap(p => (p.Products || []).flatMap(g => g.Products || []))
+    return all.map(mapWoolworths)
   } catch (e) {
     console.error(`[search:woolworths] ${e.message}`)
     return []
