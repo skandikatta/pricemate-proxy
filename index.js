@@ -75,7 +75,10 @@ async function woolworthsSearch(query, page = 1) {
   const body = JSON.stringify({
     SearchTerm: query, PageNumber: page, PageSize: 36, SortType: 'TraderRelevance',
     Filters: [], IsSpecial: false, Location: `/shop/search/products?searchTerm=${query}`,
-    IsHideEverydayMarketProducts: false, GroupEdmVariants: false, EnableAdReRanking: false
+    // Hide Everyday Market (Woolies' 3rd-party marketplace) so our count
+    // matches what woolworths.com.au shows by default. Without this,
+    // "fruit" returns 720 while their site shows 547.
+    IsHideEverydayMarketProducts: true, GroupEdmVariants: false, EnableAdReRanking: false
   })
   const res = await fetch(`${WOOLWORTHS_BASE}/apis/ui/Search/products`, {
     method: 'POST',
@@ -186,7 +189,14 @@ app.get('/api/search', async (req, res) => {
     (store === 'all' || store === 'coles') ? searchColes(q) : Promise.resolve([]),
     (store === 'all' || store === 'woolworths') ? searchWoolworths(q) : Promise.resolve([]),
   ])
-  const products = [...colesProducts, ...wooliesProducts]
+  // Dedup by (store, productId) — paginated fetches can return overlapping
+  // products at page boundaries when the upstream re-sorts mid-traversal.
+  const seen = new Set()
+  const products = [...colesProducts, ...wooliesProducts].filter(p => {
+    const k = `${p.store}|${p.productId}`
+    if (seen.has(k)) return false
+    seen.add(k); return true
+  })
   products.sort((a, b) => (b.isOnSpecial - a.isOnSpecial) || (a.price - b.price))
   res.json({ products, query: q, total: products.length })
 })
