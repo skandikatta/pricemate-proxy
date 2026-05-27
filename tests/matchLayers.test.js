@@ -6,10 +6,12 @@ const {
   extractCoreName,
   extractSize,
   matchLayer0,
+  matchLayer05,
   matchLayer1,
   matchLayer2,
   matchLayer3,
   matchLayer4,
+  hammingDistance,
 } = mp
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -28,6 +30,8 @@ function makeProduct(store, partial) {
     size,
     category: partial.category || null,
     barcode: partial.barcode ?? null,
+    // image_phash is a BigInt in production; tests can pass numbers and we'll cast.
+    image_phash: partial.image_phash == null ? null : BigInt(partial.image_phash),
     normalized: normalize(name),
     core: extractCoreName(name, brand),
     sizeNorm: extractSize(name, size),
@@ -551,5 +555,92 @@ describe('Layer interaction (no double-matching)', () => {
 
     const layer1 = matchLayer1(products)  // no existingMatched arg
     expect(layer1).toHaveLength(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// Layer 0.5 — image perceptual-hash match (same brand + same size + Hamming ≤ 6)
+// ─────────────────────────────────────────────────────────────────────────
+describe('matchLayer05 (image pHash with brand+size guard)', () => {
+  const ALL_ONES = (1n << 64n) - 1n           // all 64 bits set
+  const NEAR_ONES = ALL_ONES ^ ((1n << 3n) - 1n)  // first 3 bits flipped → Hamming 3
+
+  test('hammingDistance: 0 for identical, 64 for inverse, in-between for partial', () => {
+    expect(hammingDistance(0n, 0n)).toBe(0)
+    expect(hammingDistance(0n, ALL_ONES)).toBe(64)
+    expect(hammingDistance(ALL_ONES, NEAR_ONES)).toBe(3)
+  })
+
+  test('Jalna case: same brand + same size + Hamming ≤ 6 → cross-store match', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: '5763167', name: 'Dairy Yoghurt Greek Style', brand: 'Jalna', size: '2kg',
+      image_phash: ALL_ONES,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: '279766', name: 'Jalna Pot Set Greek Style Natural Yoghurt', brand: 'Jalna', size: '2kg',
+      image_phash: NEAR_ONES,  // Hamming 3 from Coles
+    }))
+    const groups = matchLayer05(products, new Set())
+    expect(groups).toHaveLength(1)
+    expect(groups[0].coles).toBe('5763167')
+    expect(groups[0].woolworths).toBe('279766')
+  })
+
+  test('different brands → never merge even if images near-identical', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-A2', name: 'Lactose Free Full Cream Milk', brand: 'a2 Milk', size: '2L', image_phash: ALL_ONES,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W-ZYMIL', name: 'Pauls Zymil Lactose Free Full Cream Milk', brand: 'Pauls Zymil', size: '2L', image_phash: ALL_ONES,
+    }))
+    expect(matchLayer05(products, new Set())).toHaveLength(0)
+  })
+
+  test('different sizes → never merge even if same brand + same image hash', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C1', name: 'Foo', brand: 'Same', size: '1L', image_phash: ALL_ONES,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W1', name: 'Foo', brand: 'Same', size: '2L', image_phash: ALL_ONES,
+    }))
+    expect(matchLayer05(products, new Set())).toHaveLength(0)
+  })
+
+  test('Hamming > 6 → not a match even with same brand+size', () => {
+    const products = emptyProducts()
+    const FAR = NEAR_ONES ^ ((1n << 10n) - 1n)  // ~7 bits different from ALL_ONES vs NEAR_ONES depending; check
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C2', name: 'Bar', brand: 'Brand', size: '500g', image_phash: 0n,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W2', name: 'Bar', brand: 'Brand', size: '500g', image_phash: (1n << 10n) - 1n,  // 10 bits set → Hamming 10
+    }))
+    expect(matchLayer05(products, new Set())).toHaveLength(0)
+  })
+
+  test('skips products without an image_phash', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C3', name: 'X', brand: 'Y', size: '500g', image_phash: null,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W3', name: 'X', brand: 'Y', size: '500g', image_phash: ALL_ONES,
+    }))
+    expect(matchLayer05(products, new Set())).toHaveLength(0)
+  })
+
+  test('respects existingMatched set (does not re-pair Layer 0 winners)', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C4', name: 'X', brand: 'Y', size: '500g', image_phash: ALL_ONES,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W4', name: 'X', brand: 'Y', size: '500g', image_phash: ALL_ONES,
+    }))
+    const matched = new Set(['coles_C4'])  // pretend Layer 0 grabbed it
+    expect(matchLayer05(products, matched)).toHaveLength(0)
   })
 })

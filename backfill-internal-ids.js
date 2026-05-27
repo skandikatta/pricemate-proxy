@@ -25,7 +25,7 @@ const path = require('path')
 const { Pool } = require('pg')
 const {
   normalize, extractCoreName, extractSize,
-  matchLayer0, matchLayer1, matchLayer2, matchLayer3, matchLayer4,
+  matchLayer0, matchLayer05, matchLayer1, matchLayer2, matchLayer3, matchLayer4,
 } = require('./match-products')
 
 const DRY_RUN = !process.argv.includes('--apply')
@@ -42,7 +42,7 @@ const pool = new Pool({
 
 async function loadAllProducts() {
   const { rows } = await pool.query(
-    `SELECT store, product_id, name, brand, size, category, image, barcode
+    `SELECT store, product_id, name, brand, size, category, image, barcode, image_phash
      FROM products
      WHERE name IS NOT NULL AND LENGTH(name) > 0`
   )
@@ -54,6 +54,7 @@ async function loadAllProducts() {
       normalized: normalize(r.name),
       core: extractCoreName(r.name, r.brand),
       sizeNorm: extractSize(r.name, r.size),
+      image_phash: r.image_phash == null ? null : BigInt(r.image_phash),
     })
   }
   return byStore
@@ -73,18 +74,19 @@ function runMatchers(products) {
   const matched = new Set()
   const mark = (g) => STORES.forEach(s => { if (g[s]) matched.add(`${s}_${g[s]}`) })
 
-  const layer0 = matchLayer0(products); layer0.forEach(mark)
-  const layer1 = matchLayer1(products, matched); layer1.forEach(mark)
-  const layer2 = matchLayer2(products, matched); layer2.forEach(mark)
-  const layer3 = matchLayer3(products, matched); layer3.forEach(mark)
-  const layer4 = matchLayer4(products, matched); layer4.forEach(mark)
+  const layer0  = matchLayer0(products);                layer0.forEach(mark)
+  const layer05 = matchLayer05(products, matched);      layer05.forEach(mark)
+  const layer1  = matchLayer1(products, matched);       layer1.forEach(mark)
+  const layer2  = matchLayer2(products, matched);       layer2.forEach(mark)
+  const layer3  = matchLayer3(products, matched);       layer3.forEach(mark)
+  const layer4  = matchLayer4(products, matched);       layer4.forEach(mark)
 
   return {
-    groups: [...layer0, ...layer1, ...layer2, ...layer3, ...layer4],
+    groups: [...layer0, ...layer05, ...layer1, ...layer2, ...layer3, ...layer4],
     matched,
     counts: {
-      layer0: layer0.length, layer1: layer1.length, layer2: layer2.length,
-      layer3: layer3.length, layer4: layer4.length,
+      layer0: layer0.length, layer05: layer05.length, layer1: layer1.length,
+      layer2: layer2.length, layer3: layer3.length, layer4: layer4.length,
     },
   }
 }
@@ -240,6 +242,7 @@ async function main() {
   const { groups, matched, counts } = runMatchers(products)
   console.log(`Cross-store groups: ${groups.length}`)
   console.log(`  Layer 0 (barcode EAN):   ${counts.layer0}`)
+  console.log(`  Layer 0.5 (image pHash): ${counts.layer05}`)
   console.log(`  Layer 1 (exact):         ${counts.layer1}`)
   console.log(`  Layer 2 (Levenshtein):   ${counts.layer2}`)
   console.log(`  Layer 3 (token-sort):    ${counts.layer3}`)

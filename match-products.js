@@ -94,7 +94,7 @@ function levenshtein(a, b) {
 }
 
 async function loadProducts() {
-  const { rows } = await pool.query('SELECT store, product_id, name, brand, size, category, barcode FROM products ORDER BY store, name')
+  const { rows } = await pool.query('SELECT store, product_id, name, brand, size, category, barcode, image_phash FROM products ORDER BY store, name')
   const byStore = { coles: [], woolworths: [], aldi: [] }
   for (const r of rows) {
     if (byStore[r.store]) {
@@ -103,6 +103,9 @@ async function loadProducts() {
         normalized: normalize(r.name),
         core: extractCoreName(r.name, r.brand),
         sizeNorm: extractSize(r.name, r.size),
+        // PG returns BIGINT as string. Keep as BigInt for cheap XOR/popcount in
+        // matchLayer05. null when image hash hasn't been computed yet.
+        image_phash: r.image_phash == null ? null : BigInt(r.image_phash),
       })
     }
   }
@@ -120,6 +123,112 @@ function matchLayer0(products) {
     }
   }
   return [...barcodeMap.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
+}
+
+// Hamming distance for two 64-bit BigInt hashes. Returns 0..64.
+function hammingDistance(a, b) {
+  let x = a ^ b
+  let n = 0
+  while (x > 0n) {
+    n += Number(x & 1n)
+    x >>= 1n
+  }
+  return n
+}
+
+const IMAGE_HASH_THRESHOLD = 6  // out of 64 bits — ≤6 = highly similar photo
+
+// Layer 0.5 — image perceptual-hash match.
+//
+// Same-brand-and-same-size guard, then Hamming(image_phash) ≤ 6 across stores.
+// This catches identity matches the text layers miss because retailers name
+// the same product differently (e.g. Coles "Dairy Yoghurt Greek Style"
+// vs Woolworths "Jalna Pot Set Greek Style Natural Yoghurt" — both brand
+// "Jalna" 2kg, both photos of the same tub).
+//
+// Hashes populated by compute-image-hashes.js. Products without a hash skip
+// this layer and fall through to Layers 1-4.
+function matchLayer05(products, existingMatched) {
+  const matched = new Set(existingMatched)
+  const groups = []
+
+  function bucketByBrandSize(list) {
+    const m = new Map()
+    for (const p of list) {
+      if (p.image_phash == null) continue
+      if (!p.sizeNorm) continue
+      const brand = (p.brand || '').toLowerCase().trim()
+      if (!brand) continue  // brand REQUIRED for image matching
+      const key = `${brand}|${p.sizeNorm}`
+      if (!m.has(key)) m.set(key, [])
+      m.get(key).push(p)
+    }
+    return m
+  }
+
+  const colesByKey = bucketByBrandSize(products.coles)
+  const wwByKey = bucketByBrandSize(products.woolworths)
+  const aldiByKey = bucketByBrandSize(products.aldi)
+  const allKeys = new Set([...colesByKey.keys(), ...wwByKey.keys(), ...aldiByKey.keys()])
+
+  for (const key of allKeys) {
+    const colesList = colesByKey.get(key) || []
+    const wwList    = wwByKey.get(key)    || []
+    const aldiList  = aldiByKey.get(key)  || []
+
+    // Coles → Woolies + Aldi
+    for (const cp of colesList) {
+      if (matched.has(`coles_${cp.product_id}`)) continue
+      let bestWW = null, bestWWDist = IMAGE_HASH_THRESHOLD + 1
+      for (const wp of wwList) {
+        if (matched.has(`woolworths_${wp.product_id}`)) continue
+        const d = hammingDistance(cp.image_phash, wp.image_phash)
+        if (d <= IMAGE_HASH_THRESHOLD && d < bestWWDist) { bestWW = wp; bestWWDist = d }
+      }
+      let bestAldi = null, bestAldiDist = IMAGE_HASH_THRESHOLD + 1
+      for (const ap of aldiList) {
+        if (matched.has(`aldi_${ap.product_id}`)) continue
+        const d = hammingDistance(cp.image_phash, ap.image_phash)
+        if (d <= IMAGE_HASH_THRESHOLD && d < bestAldiDist) { bestAldi = ap; bestAldiDist = d }
+      }
+      if (bestWW || bestAldi) {
+        groups.push({
+          coles: cp.product_id,
+          woolworths: bestWW?.product_id || null,
+          aldi: bestAldi?.product_id || null,
+          display_name: cp.name,
+          size: cp.sizeNorm,
+        })
+        matched.add(`coles_${cp.product_id}`)
+        if (bestWW) matched.add(`woolworths_${bestWW.product_id}`)
+        if (bestAldi) matched.add(`aldi_${bestAldi.product_id}`)
+      }
+    }
+
+    // Woolies → Aldi (for products without a Coles equivalent)
+    for (const wp of wwList) {
+      if (matched.has(`woolworths_${wp.product_id}`)) continue
+      let bestAldi = null, bestAldiDist = IMAGE_HASH_THRESHOLD + 1
+      for (const ap of aldiList) {
+        if (matched.has(`aldi_${ap.product_id}`)) continue
+        const d = hammingDistance(wp.image_phash, ap.image_phash)
+        if (d <= IMAGE_HASH_THRESHOLD && d < bestAldiDist) { bestAldi = ap; bestAldiDist = d }
+      }
+      if (bestAldi) {
+        groups.push({
+          coles: null,
+          woolworths: wp.product_id,
+          aldi: bestAldi.product_id,
+          display_name: wp.name,
+          size: wp.sizeNorm,
+        })
+        matched.add(`woolworths_${wp.product_id}`)
+        matched.add(`aldi_${bestAldi.product_id}`)
+      }
+    }
+  }
+
+  return groups
 }
 
 function matchLayer1(products, existingMatched) {
@@ -345,7 +454,16 @@ async function main() {
     if (g.aldi) matched.add(`aldi_${g.aldi}`)
   }
 
-  // Layer 1: Exact match (skip products already matched by Layer 0 to avoid duplicate groups)
+  // Layer 0.5: Image perceptual-hash match (same brand + same size + Hamming ≤ 6)
+  const layer05 = matchLayer05(products, matched)
+  console.log(`Layer 0.5 (image pHash, brand+size guard): ${layer05.length} groups`)
+  for (const g of layer05) {
+    if (g.coles) matched.add(`coles_${g.coles}`)
+    if (g.woolworths) matched.add(`woolworths_${g.woolworths}`)
+    if (g.aldi) matched.add(`aldi_${g.aldi}`)
+  }
+
+  // Layer 1: Exact match (skip products already matched by Layer 0/0.5)
   const layer1 = matchLayer1(products, matched)
   console.log(`Layer 1 (exact brand+size+name): ${layer1.length} groups`)
   for (const g of layer1) {
@@ -376,7 +494,7 @@ async function main() {
   const layer4 = matchLayer4(products, matched)
   console.log(`Layer 4 (Aldi house brand): ${layer4.length} groups`)
 
-  const allGroups = [...layer0, ...layer1, ...layer2, ...layer3, ...layer4]
+  const allGroups = [...layer0, ...layer05, ...layer1, ...layer2, ...layer3, ...layer4]
   console.log(`\nTotal: ${allGroups.length} product groups`)
 
   // Stats
@@ -403,10 +521,12 @@ module.exports = {
   tokenOverlap,
   levenshtein,
   matchLayer0,
+  matchLayer05,
   matchLayer1,
   matchLayer2,
   matchLayer3,
   matchLayer4,
+  hammingDistance,
   loadProducts,
   saveGroups,
   main,
