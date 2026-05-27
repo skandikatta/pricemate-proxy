@@ -115,7 +115,11 @@ function mapWoolworths(p) {
 // filter/sort. Coles + Woolies upstream calls are independent so we run
 // them in parallel; within each store we fetch page 1, then in parallel
 // fetch pages 2..N up to MAX_PAGES based on the noOfResults header.
-const MAX_PAGES_PER_STORE = 6  // Coles 6×48≈288, Woolies 6×36=216. Plenty for "milk".
+// Tuned so we can match what Coles + Woolies show on their own sites:
+// Coles "milk" = 137 results; 4 pages × 48 covers it.
+// Woolies "milk" = 304 results; 9 pages × 36 covers it.
+const MAX_COLES_PAGES = 6
+const MAX_WOOLIES_PAGES = 9
 const COLES_PAGE_SIZE = 48
 const WOOLIES_PAGE_SIZE = 36
 
@@ -138,7 +142,7 @@ async function searchColes(q) {
     const id = await getBuildId()
     const first = await fetchColesPage(q, 1, id)
     if (first.results.length === 0) return []
-    const totalPages = Math.min(MAX_PAGES_PER_STORE, Math.ceil(first.total / COLES_PAGE_SIZE))
+    const totalPages = Math.min(MAX_COLES_PAGES, Math.ceil(first.total / COLES_PAGE_SIZE))
     const rest = totalPages > 1
       ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, i) => fetchColesPage(q, i + 2, id)))
       : []
@@ -156,7 +160,7 @@ async function searchWoolworths(q) {
     if (!first?.Products) return []
     const firstProducts = first.Products.flatMap(g => g.Products || [])
     const total = first.SearchResultsCount || first.TotalCount || firstProducts.length
-    const totalPages = Math.min(MAX_PAGES_PER_STORE, Math.ceil(total / WOOLIES_PAGE_SIZE))
+    const totalPages = Math.min(MAX_WOOLIES_PAGES, Math.ceil(total / WOOLIES_PAGE_SIZE))
     const rest = totalPages > 1
       ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, i) => woolworthsSearch(q, i + 2)))
       : []
