@@ -52,33 +52,77 @@ const storeUrl = {
 
 const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
 
+// Each store gets a colored badge using their actual brand color so the
+// email is instantly identifiable by source. Coles red, Woolies green,
+// Aldi blue + yellow. The PriceMate "NO GREEN" rule applies to SAVINGS
+// semantics (where competitors use green); store-brand greens are
+// legitimate identity here, not rule violations.
+const STORE_BRAND = {
+  coles:      { bg: '#E01A22', fg: '#FFFFFF', letter: 'C' },
+  woolworths: { bg: '#178740', fg: '#FFFFFF', letter: 'W' },
+  aldi:       { bg: '#00549A', fg: '#FFCB05', letter: 'A' },
+}
+
 // HTML escape — every user-controlled value goes through this before
 // landing in the template string. Same set as alerts.js on the VM.
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-// Inline digest email template — N products in one email, not N emails.
-// Each item has its own gold price strip; intro line varies by count.
+// Render a per-store badge: 22px square with the store's first letter in
+// brand colors, paired with the store name. Inline-rendered for email
+// reliability (no image hosting, no broken-image fallback risk).
+function storeBadgeHtml(store) {
+  const b = STORE_BRAND[store]
+  const name = STORE_NAME[store] || store
+  if (!b) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">${esc(name)}</span>`
+  return `<span style="display:inline-block;vertical-align:middle">
+    <span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;background:${b.bg};color:${b.fg};border-radius:6px;font-size:13px;font-weight:800;vertical-align:middle">${b.letter}</span>
+    <span style="display:inline-block;margin-left:6px;font-size:12px;font-weight:700;color:${b.bg};letter-spacing:0.02em;vertical-align:middle">${esc(name)}</span>
+  </span>`
+}
+
+// Digest email — one email, N product cards inside, each with the store's
+// brand-color badge so the user can tell at a glance whether a deal is at
+// Coles, Woolworths, or Aldi.
 function renderDigestHtml({ items, scope, unsubscribeUrl }) {
   const intro = digestIntro(items.length, scope)
+  const sub = digestSubHeader(scope)
   const itemsHtml = items.map(it => {
     const savings = (it.normalPrice - it.currentPrice).toFixed(2)
     const pctOff = Math.round(((it.normalPrice - it.currentPrice) / it.normalPrice) * 100)
-    const storeName = STORE_NAME[it.store] || it.store
-    return `<div style="padding:14px 16px;border-radius:12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);margin-bottom:10px">
-  <table style="width:100%" role="presentation"><tr>
-    <td style="vertical-align:middle">
-      <p style="margin:0 0 4px 0;font-size:14px;font-weight:600;color:#f1f0ff;line-height:1.3">${esc(it.productName)}</p>
-      <p style="margin:0 0 6px 0;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.04em">${esc(storeName)}</p>
-      <p style="margin:0;font-size:20px;font-weight:700;color:#fbbf24;letter-spacing:-0.02em;line-height:1"><span style="font-size:22px">$${it.currentPrice.toFixed(2)}</span> <span style="font-size:12px;color:#fbbf24;opacity:0.7;font-weight:500;text-decoration:line-through">$${it.normalPrice.toFixed(2)}</span></p>
-      <p style="margin:4px 0 0 0;font-size:11px;color:#fbbf24;opacity:0.85">save $${savings} (${pctOff}% off)</p>
-    </td>
-    <td style="vertical-align:middle;text-align:right;padding-left:12px">
-      <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;display:inline-block">View</a>
-    </td>
-  </tr></table>
+    const brand = STORE_BRAND[it.store] || { bg: '#9ca3af', fg: '#FFFFFF', letter: '?' }
+    // Each card has a left-edge color stripe matching the store's brand.
+    return `<div style="margin-bottom:12px;border-radius:12px;overflow:hidden;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06)">
+  <table style="width:100%;border-collapse:collapse" role="presentation">
+    <tr>
+      <td style="width:4px;background:${brand.bg};padding:0"></td>
+      <td style="padding:14px 16px">
+        <table style="width:100%" role="presentation"><tr>
+          <td style="vertical-align:top">
+            <div style="margin-bottom:8px">${storeBadgeHtml(it.store)}</div>
+            <p style="margin:0 0 8px 0;font-size:14px;font-weight:600;color:#f1f0ff;line-height:1.3">${esc(it.productName)}</p>
+            <p style="margin:0;font-size:18px;font-weight:700;letter-spacing:-0.01em;line-height:1">
+              <span style="color:#fbbf24">$${it.currentPrice.toFixed(2)}</span>
+              <span style="font-size:12px;color:#9ca3af;font-weight:500;text-decoration:line-through;margin-left:4px">$${it.normalPrice.toFixed(2)}</span>
+              <span style="font-size:11px;color:#fbbf24;font-weight:700;margin-left:6px;letter-spacing:0.02em">${pctOff}% OFF</span>
+            </p>
+            <p style="margin:4px 0 0 0;font-size:11px;color:#9ca3af">save $${savings}</p>
+          </td>
+          <td style="vertical-align:middle;text-align:right;padding-left:12px;white-space:nowrap">
+            <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:9px 14px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;display:inline-block">View at ${esc(STORE_NAME[it.store])}</a>
+          </td>
+        </tr></table>
+      </td>
+    </tr>
+  </table>
 </div>`
+  }).join('')
+  // Count distinct stores represented so the sub-header can advertise.
+  const storeCounts = items.reduce((acc, it) => { acc[it.store] = (acc[it.store] || 0) + 1; return acc }, {})
+  const storeChips = Object.entries(storeCounts).map(([store, n]) => {
+    const b = STORE_BRAND[store]
+    return `<span style="display:inline-block;margin-right:6px;padding:3px 8px;border-radius:6px;background:${b.bg};color:${b.fg};font-size:10px;font-weight:700;letter-spacing:0.03em">${n} ${esc(STORE_NAME[store].toUpperCase())}</span>`
   }).join('')
   return `<!doctype html><html><head><meta charset="utf-8"></head><body style="background:#080520;font-family:Manrope,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px 12px;color:#f1f0ff">
 <div style="max-width:560px;margin:0 auto;background:#0f0a2a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);overflow:hidden">
@@ -89,7 +133,9 @@ function renderDigestHtml({ items, scope, unsubscribeUrl }) {
     </tr></table>
   </div>
   <div style="padding:24px">
-    <h1 style="margin:0 0 20px 0;font-size:22px;font-weight:700;letter-spacing:-0.02em;line-height:1.25;color:#f1f0ff">${esc(intro)}</h1>
+    <h1 style="margin:0 0 6px 0;font-size:22px;font-weight:700;letter-spacing:-0.02em;line-height:1.25;color:#f1f0ff">${esc(intro)}</h1>
+    ${sub ? `<p style="margin:0 0 14px 0;font-size:13px;color:#9ca3af;line-height:1.4">${esc(sub)}</p>` : ''}
+    <div style="margin-bottom:18px">${storeChips}</div>
     ${itemsHtml}
   </div>
   <hr style="border:0;border-top:1px solid rgba(255,255,255,0.08);margin:0">
@@ -99,14 +145,20 @@ function renderDigestHtml({ items, scope, unsubscribeUrl }) {
 </div></body></html>`
 }
 
+function digestSubHeader(scope) {
+  if (scope === 'watchlist') return 'From your watchlist'
+  if (scope === 'category') return 'In your selected category'
+  return null
+}
+
 function renderDigestText({ items, scope, unsubscribeUrl }) {
   const intro = digestIntro(items.length, scope)
   const lines = [intro, '']
   for (const it of items) {
     const savings = (it.normalPrice - it.currentPrice).toFixed(2)
     const pctOff = Math.round(((it.normalPrice - it.currentPrice) / it.normalPrice) * 100)
-    const storeName = STORE_NAME[it.store] || it.store
-    lines.push(`• ${it.productName} (${storeName})`)
+    const storeName = (STORE_NAME[it.store] || it.store).toUpperCase()
+    lines.push(`[${storeName}] ${it.productName}`)
     lines.push(`  $${it.currentPrice.toFixed(2)} (was $${it.normalPrice.toFixed(2)}, save $${savings}, ${pctOff}% off)`)
     lines.push(`  ${it.productUrl}`)
     lines.push('')
@@ -234,13 +286,14 @@ async function alreadyAlerted(subId, store, productId) {
 }
 
 async function watchlistFor(email) {
-  // The frontend stores watchlist in localStorage (per useWatchlist hook).
-  // For the cron to know what each user watches, they need to opt-in to
-  // server-side watchlist sync. Until that's built, 'watchlist' scope is
-  // skipped here. 'all-specials' is the default that works without sync.
-  // TODO when we ship server-side watchlist: SELECT store, product_id
-  // FROM user_watchlist WHERE LOWER(user_email) = $1.
-  return null
+  // Server-side watchlist (migration 002_user_watchlist.sql). Returns the
+  // user's full watched-products set. The cron then intersects this with
+  // the day's on-sale products and sends a digest of the matches.
+  const { rows } = await pool.query(
+    `SELECT store, product_id FROM user_watchlist WHERE LOWER(email) = LOWER($1)`,
+    [email]
+  )
+  return rows
 }
 
 async function sendDigest(sub, products) {
