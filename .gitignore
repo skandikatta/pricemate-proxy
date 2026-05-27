@@ -8,3 +8,8 @@ node_modules
 backups/
 *.dump
 .gstack/
+
+# Scraped competitor data + audit JSONs — generated artifacts, not source.
+hagglers-data*.json
+ingest-hagglers-audit-*.json
+backfill-audit-*.json
