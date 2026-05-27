@@ -1,7 +1,14 @@
 # Option C — internal_id (passport) + product_aliases (phone numbers) — Apply Runbook
 
-**Status:** Code complete, NOT yet applied to prod.
-**Pre-reqs:** Option B in force (current state). `match-products.js` Layers 0-4 with brand+size guards (already shipped).
+> **✅ APPLIED to prod 2026-05-28.** Live-state document: [`OPTION_C_PROD_STATE.md`](./OPTION_C_PROD_STATE.md).
+>
+> **⛔ Changes to this logic require Praveen's explicit approval** — see change-control rule in OPTION_C_PROD_STATE.md.
+>
+> Stages 0-5 executed; Stage 6 (drop v1 tables, migration 006) intentionally deferred until ≥7 days of clean v2 predictions.
+>
+> This document is preserved as the procedure of record. If you need to re-run any stage (e.g. on a clone, or for a future similar migration), the commands below still apply.
+
+**Pre-reqs:** Option B in force (was current state). `match-products.js` Layers 0-4 with brand+size guards (already shipped).
 **Design source:** `pricemate-proxy/REFACTOR_PRICE_HISTORY.md` (Option C section).
 
 This runbook walks the cutover from vendor_id-keyed `price_history` to internal_id-keyed `price_history_v2`. It is intentionally **staged** — dual-write for a week before flipping reads, drop old tables only after sustained verification.

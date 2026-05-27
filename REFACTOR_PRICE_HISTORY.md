@@ -1,13 +1,18 @@
 # Price History Refactor — Bug + Options + Decisions
 
-**Status:** ✅ **RESOLVED 2026-05-26 via Option B** (commit `01b2755`).
-- Deleted the `upsertProducts` ID-migration block entirely
-- Renamed vendor_ids now treated as new products
-- Verified live: Coles scrape `26436156691` completed all 15 categories, zero `duplicate key` errors
-- pg_dump backup: `backups/pre-option-b-20260526T061603Z.dump` (local + on VM `/var/lib/postgresql/backups/`)
-- Audit before stripping: 896 normalized-name duplicate groups in Coles alone — past "successful" migrations were silently merging unrelated SKUs, confirming Option B was the right call. Option C (internal-UUID) deferred per recommendation; only revisit if prediction telemetry shows fragmentation hurts.
+**Status:** ✅ **RESOLVED 2026-05-28 via Option C SHIPPED.**
 
-Historical analysis below preserved for context.
+**Current live state — source of truth:** [`OPTION_C_PROD_STATE.md`](./OPTION_C_PROD_STATE.md).
+**Apply procedure:** [`OPTION_C_RUNBOOK.md`](./OPTION_C_RUNBOOK.md).
+
+**⛔ Changes to this logic require Praveen's explicit approval.** See the change-control section in `OPTION_C_PROD_STATE.md`.
+
+Timeline:
+- **2026-05-25** (`757caeb`): first "smart ID migration" shipped — matched on normalized name alone. Crashed daily + silently merged unrelated products.
+- **2026-05-26** (`01b2755`): Option B shipped — ID-migration block deleted. Audit found 896 false-merge groups in Coles confirming `757caeb` was corrupting data. Option C deferred under "only revisit if prediction telemetry shows fragmentation hurts."
+- **2026-05-28** (`0e082f9` + `82fda75`): Option C SHIPPED. The deferral condition was reached: 50% of products had ≤1 history row, predictions failing for the long tail. The fix this time uses `match-products.js` Layers 0-4 (brand + size + barcode guards) — the audit-class protection the original 757caeb lacked.
+
+Historical analysis below preserved for context — do not edit.
 
 ---
 

@@ -1,0 +1,120 @@
+# Option C — Live in Production
+
+**Status:** ✅ **SHIPPED** to production on **2026-05-28** (Sydney time).
+**Approval policy:** ⛔ **No changes to this logic without Praveen's explicit approval.** See [Change-control rule](#change-control-rule) at bottom.
+
+## What "this logic" means
+
+The **passport + phone-number** pattern for product identity:
+
+- **`products_v2.internal_id`** (UUID) — the *passport*. One per canonical product. Never changes, ever.
+- **`product_aliases (store, vendor_id) → internal_id`** — the *phone numbers*. Many per passport (one per store, plus historical aliases when retailers rename SKUs).
+- **`price_history_v2`** keyed on `internal_id` — survives all vendor_id churn at Coles / Woolworths / Aldi.
+
+When Coles renames `1234 → 5678` (packaging refresh, rebrand, repack):
+1. Matcher detects same brand + size + core name → same product
+2. New `5678` alias appended under the existing `internal_id` (active=true)
+3. Old `1234` alias marked active=false (audit trail preserved, not deleted)
+4. `price_history_v2` rows accumulate against the **same** `internal_id` — no fragmentation
+
+The predictor sees one unbroken history. Cycle detection works across renames.
+
+## Production state (live as of 2026-05-28)
+
+| Layer | State |
+|---|---|
+| **pg_dump backup** | `/var/lib/postgresql/backups/pre-option-c-20260527T143054Z.dump` (6.0 MB, restore-verified) |
+| **Schema** | Migration 005 applied. `products_v2`, `product_aliases`, `price_history_v2` exist alongside Option B's `products` / `price_history` |
+| **Backfill** | 76,158 passports · 79,086 aliases · 225,106 price_history rows re-keyed by `internal_id` |
+| **Cross-store groups** | 2,818 (Layer 0 barcode: 354 · Layer 1 exact: 1,699 · Layer 2 Levenshtein: 252 · Layer 3 token-sort: 395 · Layer 4 Aldi house: 118) |
+| **Audit** | Spot-checked top 200 multi-alias groups — no false-merges. All match on brand + size + core product |
+| **Scraper shadow-write** | `OPTION_C_SHADOW_WRITE=1` enabled on all 3 scraper workflows (Coles / Woolworths / Aldi) — dual-writes v1 and v2 |
+| **VM API** | `/api/price-history-v2` live in `api-server.js` (backup at `api-server.js.bak.pre-option-c`) |
+| **Frontend** | `pricemate/lib/predictions.ts` + `app/api/prices/route.ts` call `/api/price-history-v2`. Vercel auto-deployed |
+
+## What protects against the 757caeb failure mode
+
+Commit `757caeb` (the original "smart ID migration", removed in `01b2755` after the audit caught **896 false-merge groups** in Coles) matched on `normalize(name)` alone. `"full cream milk"` → 14 different vendor_ids, mostly genuinely different SKUs.
+
+The current backfill uses `match-products.js` Layers 0-4, which gate on:
+
+1. **Layer 0** — barcode equality (strongest; 354 groups here)
+2. **Layer 1** — exact `(brand + size + core_name)` triple match
+3. **Layer 2** — same size + Levenshtein ≤ 3 on core_name, brand still required
+4. **Layer 3** — token-sort ratio ≥ 0.80 (or 0.65 for both-store-brand pairs) + brand veto + size match
+5. **Layer 4** — Aldi house-brand to Coles/Woolies house-brand or brandless, same size, token-sort ≥ 0.75
+
+Brand and size are **load-bearing**. Removing either reintroduces the false-merge class.
+
+## What's NOT in scope of this ship (deferred)
+
+- **Inline rename detection** in `db.js` — when a scraper sees a fresh vendor_id that's not in any alias, it mints a new passport. The rename stitching is intentionally NOT done inline; it'll be a separate offline pass (`detect-renames.js`) with a manual review queue. Until that ships, new vendor_ids from a retailer rename will start fresh history — same orphan behaviour as today, just on the new schema.
+- **Drop v1 tables** (migration 006) — keep `price_history` and `products` for at least 7 days of clean v2 predictions before considering.
+- **UI surface** — no "history spans SKUs 1234, 5678" indicator yet. Data is there, render is future work.
+
+## Rollback paths (in increasing disruption)
+
+1. **Frontend only:** `git revert 82fda75 && git push` → Vercel redeploys reading v1.
+2. **Shadow write:** `git revert 3c46207 && git push` → scrapers stop writing v2 (v2 data stays in DB).
+3. **VM endpoint:** `cp api-server.js.bak.pre-option-c api-server.js && sudo systemctl restart pricemate-api`.
+4. **Catastrophic** (data corruption discovered): restore `pre-option-c-20260527T143054Z.dump`.
+
+## Verification queries (run any time)
+
+```sql
+-- Daily growth (run morning after a cron run)
+SELECT (SELECT COUNT(*) FROM price_history    WHERE scraped_at::date = CURRENT_DATE - 1) AS v1_yesterday,
+       (SELECT COUNT(*) FROM price_history_v2 WHERE scraped_at::date = CURRENT_DATE - 1) AS v2_yesterday;
+
+-- Sample cross-store merges
+SELECT pv.canonical_name, pv.brand, pv.size,
+       ARRAY_AGG(pa.store || ':' || pa.vendor_id ORDER BY pa.store) AS aliases
+  FROM products_v2 pv JOIN product_aliases pa ON pa.internal_id = pv.internal_id
+  GROUP BY pv.internal_id, pv.canonical_name, pv.brand, pv.size
+  HAVING COUNT(*) > 1
+  ORDER BY pv.canonical_name LIMIT 20;
+
+-- How many passports have >1 alias today (cross-store-merged products)
+SELECT COUNT(*) FROM (
+  SELECT internal_id FROM product_aliases
+   GROUP BY internal_id HAVING COUNT(*) > 1
+) m;
+
+-- Spot-check a specific product's full history across all its aliases
+SELECT ph.store, ph.scraped_at::date, ph.price
+  FROM price_history_v2 ph
+  JOIN product_aliases pa ON pa.internal_id = ph.internal_id
+ WHERE pa.store = 'coles' AND pa.vendor_id = '<a real vendor_id>'
+ ORDER BY ph.scraped_at;
+```
+
+## Commits in this ship
+
+| SHA | Repo | What |
+|---|---|---|
+| `0e082f9` | pricemate-proxy | shadow-write code in db.js + backfill script + tests + runbook |
+| `4123eeb` | pricemate-proxy | backfill honours PGDATABASE for test-DB rehearsal |
+| `3c46207` | pricemate-proxy | OPTION_C_SHADOW_WRITE=1 in scraper workflows |
+| `d821050` | pricemate | migration 005 + VM read-path patch source |
+| `82fda75` | pricemate | frontend cuts predictions read to /api/price-history-v2 |
+
+## Change-control rule
+
+⛔ **The passport + aliases logic is now load-bearing for predictions.** It was designed deliberately, audited extensively (matching the audit findings from `01b2755`), and protects against a known-bad failure mode (`757caeb`'s false-merge class).
+
+**Any change to this logic must be explicitly approved by Praveen before it lands.**
+
+That includes — but is not limited to:
+
+- The `products_v2` / `product_aliases` / `price_history_v2` schema
+- The matching strategy in `backfill-internal-ids.js` (especially the brand+size guards)
+- The shadow-write code in `db.js` (`shadowUpsertProductsV2`, `shadowInsertPriceHistoryV2`)
+- The match-products.js Layer 0-4 thresholds (those layers underpin the rename detection)
+- The `/api/price-history-v2` read endpoint behaviour
+- The decision to ship inline rename detection (currently deferred)
+- Any migration 006 work (dropping v1 tables)
+
+Things that do NOT require approval:
+- Reading the data (queries, dashboards, observability)
+- Adding tests that pin down current behaviour
+- Documentation updates that don't change semantics
