@@ -123,14 +123,27 @@ function matchLayer0(products) {
 }
 
 function matchLayer1(products, existingMatched) {
-  // Exact: brand + size + core name
+  // Exact: brand + size + core name.
+  //
+  // BRAND IS LOAD-BEARING IN THE KEY. Before 2026-05-28 this key was just
+  // `core|sizeNorm` — the comment said brand was included but the code wasn't.
+  // The audit found false-merges in prod: a2 Milk + Pauls Zymil + Coles brand
+  // "Lactose Free Full Cream Milk 2L" all collapsed into one group because
+  // they shared the same extracted core+size. Including brand in the key
+  // (with empty-brand falling through to Layers 3-4's store-brand carve-outs)
+  // is the audit-class fix for the 757caeb failure mode at this layer too.
   const matched = new Set(existingMatched || [])
   const groups = new Map() // key → { coles, woolworths, aldi }
   for (const store of ['coles', 'woolworths', 'aldi']) {
     for (const p of products[store]) {
       if (!p.sizeNorm || !p.core) continue
       if (matched.has(`${store}_${p.product_id}`)) continue
-      const key = `${p.core}|${p.sizeNorm}`
+      // Empty brand → unbranded products fall through to Layer 3 (token-sort
+      // with store-brand carve-out) so we don't blindly group every brandless
+      // SKU sharing a core+size.
+      const brandKey = (p.brand || '').toLowerCase().trim()
+      if (!brandKey) continue
+      const key = `${brandKey}|${p.core}|${p.sizeNorm}`
       if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
       if (!groups.get(key)[store]) groups.get(key)[store] = p.product_id
     }

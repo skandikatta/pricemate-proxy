@@ -162,6 +162,41 @@ describe('matchLayer1 (exact brand+size+core name)', () => {
     expect(groups[0].woolworths).toBe('W13')
     expect(groups[0].aldi).toBe('A13')
   })
+
+  // Regression for 2026-05-28 audit finding — false-merge of 3 different
+  // brand "Lactose Free Full Cream Milk 2L" SKUs because Layer 1's key
+  // omitted brand. Pauls Zymil, Coles brand, a2 Milk, and Aldi FARMDALE
+  // all extract to the same core+size — and were collapsing into one group.
+  test('Pauls Zymil ≠ Coles brand ≠ a2 Milk for the same core+size product', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-COLES', name: 'Lactose Free Full Cream Milk', brand: 'Coles', size: '2L',
+    }))
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-A2', name: 'Lactose Free Full Cream Milk', brand: 'a2 Milk', size: '2L',
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W-ZYMIL', name: 'Pauls Zymil Lactose Free Full Cream Milk', brand: 'Pauls Zymil', size: '2L',
+    }))
+
+    const groups = matchLayer1(products)
+    // No group should have BOTH Coles-brand and Pauls Zymil — different brands
+    // are different products even when core+size match.
+    expect(groups).toHaveLength(0)  // each is unique → none cross-store-paired at Layer 1
+  })
+
+  test('empty brand falls through to later layers (does not group blindly)', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-BLANK1', name: 'Generic Item 500g', brand: null, size: '500g',
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W-BLANK1', name: 'Generic Item 500g', brand: null, size: '500g',
+    }))
+
+    const groups = matchLayer1(products)
+    expect(groups).toHaveLength(0)  // Layer 1 only groups when brand is present on both sides
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────
