@@ -73,17 +73,42 @@ async function woolworthsBrowse(categoryId, page = 1) {
 async function woolworthsSearch(query, page = 1) {
   const cookies = await getWoolworthsCookies()
   // Body mirrors what woolworths.com.au actually POSTs from their own search
-  // UI (captured live via Playwright 2026-05-27). The key fields that bring
-  // SearchResultsCount in line with their displayed count:
-  //   - IsHideEverydayMarketProducts: false (we had it true, was inflating)
-  //   - ExcludeSearchTypes: ["UntraceableVendors"] (we had nothing — this
-  //     filter is what trims their displayed result count)
+  // UI (captured live via Playwright 2026-05-27). The `flags` block is the
+  // hidden trick — without it Woolies runs a broad semantic search and
+  // returns 2180 results for "milk"; with it they restrict to precision
+  // matching and return 304 (what their site actually displays). Verified
+  // live: same query with vs without flags = 304 vs 2180.
   const body = JSON.stringify({
-    SearchTerm: query, PageNumber: page, PageSize: 36, SortType: 'TraderRelevance',
-    Filters: [], IsSpecial: false, Location: `/shop/search/products?searchTerm=${query}`,
-    IsHideEverydayMarketProducts: false, IsHideUnavailableProducts: false,
-    GpBoost: 0, EnableAdReRanking: false, IsRegisteredRewardCardPromotion: false,
+    EnableAdReRanking: false,
     ExcludeSearchTypes: ['UntraceableVendors'],
+    Filters: [],
+    GpBoost: 0,
+    IsHideEverydayMarketProducts: false,
+    IsHideUnavailableProducts: false,
+    IsRegisteredRewardCardPromotion: false,
+    IsSpecial: false,
+    Location: `/shop/search/products?searchTerm=${query}`,
+    PageNumber: page, PageSize: 36, SearchTerm: query, SortType: 'TraderRelevance',
+    flags: {
+      SemanticSearchModel: 'secondary',
+      EnableExactMatchExecutor: true,
+      EnableNonStatementExecutor: false,
+      EnablePhraseAssociationExecutor: false,
+      EnableAutocorrectExecutor: false,
+      EnablePartialMatchExecutor: false,
+      EnableSemanticOnlyExecutor: true,
+      SemanticExactMatchMinScore: 0.7,
+      SemanticNonStatementMinScore: 1,
+      SemanticPhraseAssociationMinScore: 1,
+      SemanticAutocorrectMinScore: 0.3,
+      SemanticPartialMatchMinScore: 0.2,
+      SemanticOnlyMinScore: 0.1,
+      MarketplaceSemanticWeight: '0.7',
+      EnableProductBoostExperiment: true,
+      EnableQueryCategorization: true,
+      QueryCategorizationThreshold: 98,
+      VariantId: 'ds2',
+    },
   })
   const res = await fetch(`${WOOLWORTHS_BASE}/apis/ui/Search/products`, {
     method: 'POST',
