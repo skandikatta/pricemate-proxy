@@ -91,6 +91,21 @@ describe('matchLayer0 (barcode EAN match)', () => {
     expect(matchLayer0(products)).toHaveLength(0)
   })
 
+  // Regression for 2026-05-28 — manufacturers share EANs across sized variants
+  // (e.g. Jalna Greek Style Yoghurt 1kg + 2kg both list 9310354980202 in OFF AU).
+  // Layer 0 must NOT collapse them — same barcode + different size → no match.
+  test('same barcode but different sizes does NOT merge', () => {
+    const products = emptyProducts()
+    const bc = '9310354980202'
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-1KG', name: 'Greek Style Natural Yoghurt', brand: 'Jalna', size: '1kg', barcode: bc,
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W-2KG', name: 'Jalna Pot Set Greek Style Natural Yoghurt', brand: 'Jalna', size: '2kg', barcode: bc,
+    }))
+    expect(matchLayer0(products)).toHaveLength(0)
+  })
+
   test('first product_id per store wins when duplicate barcodes within a store', () => {
     const products = emptyProducts()
     const bc = '9300000000005'

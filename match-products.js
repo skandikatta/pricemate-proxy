@@ -113,16 +113,26 @@ async function loadProducts() {
 }
 
 function matchLayer0(products) {
-  // Barcode: exact EAN match across stores (100% accurate)
-  const barcodeMap = new Map() // barcode → { coles, woolworths, aldi, display_name, size }
+  // Barcode: exact EAN match across stores.
+  //
+  // 2026-05-28 size guard added: manufacturers sometimes share an EAN across
+  // the size-variants of a product family (e.g. Jalna Greek Style Yoghurt
+  // 1kg and 2kg both list 9310354980202 in OFF AU). Without a size guard
+  // Layer 0 would merge them, and that wrong pairing would block Layer 0.5
+  // from finding the correct same-size cross-store match.
+  // Now: same barcode AND same sizeNorm required.
+  const groups = new Map() // (barcode|sizeNorm) → group
   for (const store of ['coles', 'woolworths', 'aldi']) {
     for (const p of products[store]) {
       if (!p.barcode) continue
-      if (!barcodeMap.has(p.barcode)) barcodeMap.set(p.barcode, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
-      if (!barcodeMap.get(p.barcode)[store]) barcodeMap.get(p.barcode)[store] = p.product_id
+      // sizeNorm null acts as its own bucket — products without size info
+      // group amongst themselves, won't merge with sized products on bare barcode.
+      const key = `${p.barcode}|${p.sizeNorm || ''}`
+      if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
+      if (!groups.get(key)[store]) groups.get(key)[store] = p.product_id
     }
   }
-  return [...barcodeMap.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
+  return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
 }
 
 // Hamming distance for two 64-bit BigInt hashes. Returns 0..64.
