@@ -47,12 +47,18 @@ const pool = new Pool({
 const storeUrl = {
   coles:      (id, _name) => `https://www.coles.com.au/product/${id}`,
   woolworths: (id, _name) => `https://www.woolworths.com.au/shop/productdetails/${id}`,
-  // Aldi has no permanent product URLs (Special Buys rotate, regular range
-  // is slug-based without a stable ID). Best we can do is deep-link to
-  // their site search with the product name — lands the user on a page
-  // showing the matching product. Verified 2026-05-27 the /search?q=
-  // endpoint exists (301→200).
-  aldi:       (_id, name) => `https://www.aldi.com.au/search?q=${encodeURIComponent(name || '')}`,
+  // Aldi DOES have permanent product URLs after all: /product/{slug}-{id}.
+  // Verified 2026-05-27: hitting /product/{id} OR /product/x-{id} 301s to
+  // the canonical /product/{real-slug}-{id}, so we can construct from just
+  // the ID. The slug we generate from the name is a UX nicety (cleaner
+  // visible URL) — even a wrong slug redirects fine.
+  // Our DB stores Aldi product_id with an `aldi_` prefix; strip it for the URL.
+  aldi: (id, name) => {
+    const cleanId = String(id || '').replace(/^aldi_/, '')
+    if (!cleanId) return 'https://www.aldi.com.au/'
+    const slug = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60)
+    return `https://www.aldi.com.au/product/${slug ? slug + '-' : ''}${cleanId}`
+  },
 }
 
 const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
