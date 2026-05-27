@@ -57,10 +57,15 @@ const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
 // Aldi blue + yellow. The PriceMate "NO GREEN" rule applies to SAVINGS
 // semantics (where competitors use green); store-brand greens are
 // legitimate identity here, not rule violations.
+// logoW computed from each official logo's aspect ratio at 28px height:
+//   Coles 103×32 → 90×28 (red wordmark)
+//   Woolies 108×96 PNG → 32×28 (apple-W mark, square-ish)
+//   Aldi 135×150 SVG → 26×28 (shield, slightly taller than wide → trim to 26)
+// logoExt: file extension actually served at /store-logos/.
 const STORE_BRAND = {
-  coles:      { bg: '#E01A22', fg: '#FFFFFF', letter: 'C', logoW: 80 },
-  woolworths: { bg: '#178740', fg: '#FFFFFF', letter: 'W', logoW: 28 },
-  aldi:       { bg: '#00549A', fg: '#FFCB05', letter: 'A', logoW: 64 },
+  coles:      { bg: '#E01A22', fg: '#FFFFFF', letter: 'C', logoW: 90, logoExt: 'svg' },
+  woolworths: { bg: '#178740', fg: '#FFFFFF', letter: 'W', logoW: 32, logoExt: 'png' },
+  aldi:       { bg: '#00549A', fg: '#FFCB05', letter: 'A', logoW: 26, logoExt: 'svg' },
 }
 
 // HTML escape — every user-controlled value goes through this before
@@ -77,7 +82,7 @@ function storeBadgeHtml(store) {
   const b = STORE_BRAND[store]
   const name = STORE_NAME[store] || store
   if (!b) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">${esc(name)}</span>`
-  const logoUrl = `${APP_BASE_URL}/store-logos/${store}.svg`
+  const logoUrl = `${APP_BASE_URL}/store-logos/${store}.${b.logoExt}`
   // Use a table-cell wrapper for the fallback so Outlook (which strips img)
   // still shows the colored background + alt text as a recognizable badge.
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display:inline-block;vertical-align:middle"><tr>
