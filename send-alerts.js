@@ -74,24 +74,23 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-// Per-store branded logo — hosted official mark on a white cell so the
-// brand colors inside each logo render correctly (Coles red wordmark
-// would otherwise blend into a red cell background).
+// Per-store CSS-only branded badge. No images = no image-blocking risk,
+// always renders identically across Gmail / Apple Mail / Outlook desktop.
 //
-// Image-blocked fallback: the white cell shows with a thin brand-colored
-// border + the store name as alt text. Less colorful than a filled badge
-// but still identifies the source. Most users (Gmail confirmed sender,
-// Apple Mail, Outlook.com) see the official logo directly.
+// Each store gets a brand-colored pill with brand-typography text:
+//   - Coles: red bg, white "coles" lowercase
+//   - Woolworths: green bg, white "Woolworths" wordmark
+//   - Aldi: blue bg, yellow "ALDI" wordmark (matches Aldi's actual color combo)
+const STORE_LABEL = {
+  coles:      { text: 'coles',      weight: 800, letterSpacing: '0.5px', case: 'normal' },
+  woolworths: { text: 'Woolworths', weight: 800, letterSpacing: '0.3px', case: 'normal' },
+  aldi:       { text: 'ALDI',       weight: 900, letterSpacing: '1.5px', case: 'normal' },
+}
 function storeBadgeHtml(store) {
   const b = STORE_BRAND[store]
-  const name = STORE_NAME[store] || store
-  if (!b) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">${esc(name)}</span>`
-  const logoUrl = `${APP_BASE_URL}/store-logos/${store}.${b.logoExt}`
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display:inline-block;vertical-align:middle"><tr>
-    <td style="background:#FFFFFF;border:1px solid ${b.bg};border-radius:6px;line-height:0;font-size:0;padding:3px 6px;height:28px;text-align:center;vertical-align:middle">
-      <img src="${esc(logoUrl)}" width="${b.logoW}" height="28" alt="${esc(name)}" style="display:inline-block;border:0;outline:none;text-decoration:none;height:28px;width:${b.logoW}px;color:${b.bg};font-family:Helvetica,Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:0.05em">
-    </td>
-  </tr></table>`
+  const l = STORE_LABEL[store]
+  if (!b || !l) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase">${esc(store)}</span>`
+  return `<span style="display:inline-block;background:${b.bg};color:${b.fg};padding:5px 14px;border-radius:6px;font-family:Helvetica,Arial,sans-serif;font-weight:${l.weight};font-size:13px;letter-spacing:${l.letterSpacing};line-height:1;vertical-align:middle">${esc(l.text)}</span>`
 }
 
 // Digest email — one email, N product cards inside, each with the store's
@@ -103,26 +102,36 @@ function renderDigestHtml({ items, scope, unsubscribeUrl }) {
   const itemsHtml = items.map(it => {
     const savings = (it.normalPrice - it.currentPrice).toFixed(2)
     const pctOff = Math.round(((it.normalPrice - it.currentPrice) / it.normalPrice) * 100)
-    const brand = STORE_BRAND[it.store] || { bg: '#9ca3af', fg: '#FFFFFF', letter: '?' }
-    // Each card has a left-edge color stripe matching the store's brand.
+    const brand = STORE_BRAND[it.store] || { bg: '#9ca3af', fg: '#FFFFFF' }
+    // Card structure: brand-color left-edge stripe + 3 stacked rows inside —
+    //   1. Badge (left) + % OFF chip (right)
+    //   2. Full-width product name
+    //   3. Price (left) + View button (right)
     return `<div style="margin-bottom:12px;border-radius:12px;overflow:hidden;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06)">
   <table style="width:100%;border-collapse:collapse" role="presentation">
     <tr>
       <td style="width:4px;background:${brand.bg};padding:0"></td>
       <td style="padding:14px 16px">
+        <!-- Row 1: badge + %OFF chip -->
         <table style="width:100%" role="presentation"><tr>
-          <td style="vertical-align:top">
-            <div style="margin-bottom:8px">${storeBadgeHtml(it.store)}</div>
-            <p style="margin:0 0 8px 0;font-size:14px;font-weight:600;color:#f1f0ff;line-height:1.3">${esc(it.productName)}</p>
-            <p style="margin:0;font-size:18px;font-weight:700;letter-spacing:-0.01em;line-height:1">
-              <span style="color:#fbbf24">$${it.currentPrice.toFixed(2)}</span>
-              <span style="font-size:12px;color:#9ca3af;font-weight:500;text-decoration:line-through;margin-left:4px">$${it.normalPrice.toFixed(2)}</span>
-              <span style="font-size:11px;color:#fbbf24;font-weight:700;margin-left:6px;letter-spacing:0.02em">${pctOff}% OFF</span>
-            </p>
-            <p style="margin:4px 0 0 0;font-size:11px;color:#9ca3af">save $${savings}</p>
+          <td style="vertical-align:middle">${storeBadgeHtml(it.store)}</td>
+          <td style="vertical-align:middle;text-align:right">
+            <span style="display:inline-block;background:#fbbf24;color:#080520;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:0.05em;line-height:1">${pctOff}% OFF</span>
           </td>
-          <td style="vertical-align:middle;text-align:right;padding-left:12px;white-space:nowrap">
-            <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:9px 14px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;display:inline-block">View at ${esc(STORE_NAME[it.store])}</a>
+        </tr></table>
+
+        <!-- Row 2: product name (full-width, left-aligned) -->
+        <p style="margin:12px 0 10px 0;font-size:15px;font-weight:600;color:#f1f0ff;line-height:1.35;letter-spacing:-0.01em">${esc(it.productName)}</p>
+
+        <!-- Row 3: price (left) + View button (right) -->
+        <table style="width:100%" role="presentation"><tr>
+          <td style="vertical-align:middle">
+            <span style="font-size:20px;font-weight:700;color:#fbbf24;letter-spacing:-0.01em">$${it.currentPrice.toFixed(2)}</span>
+            <span style="font-size:13px;color:#9ca3af;font-weight:500;text-decoration:line-through;margin-left:6px">$${it.normalPrice.toFixed(2)}</span>
+            <div style="font-size:11px;color:#9ca3af;margin-top:4px">save $${savings}</div>
+          </td>
+          <td style="vertical-align:middle;text-align:right;white-space:nowrap">
+            <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;display:inline-block">View at ${esc(STORE_NAME[it.store])} &rarr;</a>
           </td>
         </tr></table>
       </td>
