@@ -45,9 +45,14 @@ const pool = new Pool({
 })
 
 const storeUrl = {
-  coles:      (id) => `https://www.coles.com.au/product/${id}`,
-  woolworths: (id) => `https://www.woolworths.com.au/shop/productdetails/${id}`,
-  aldi:       () => 'https://www.aldi.com.au/groceries/',  // Aldi doesn't have product URLs
+  coles:      (id, _name) => `https://www.coles.com.au/product/${id}`,
+  woolworths: (id, _name) => `https://www.woolworths.com.au/shop/productdetails/${id}`,
+  // Aldi has no permanent product URLs (Special Buys rotate, regular range
+  // is slug-based without a stable ID). Best we can do is deep-link to
+  // their site search with the product name — lands the user on a page
+  // showing the matching product. Verified 2026-05-27 the /search?q=
+  // endpoint exists (301→200).
+  aldi:       (_id, name) => `https://www.aldi.com.au/search?q=${encodeURIComponent(name || '')}`,
 }
 
 const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
@@ -74,17 +79,31 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-// Per-store CSS-only branded badge. No images = no image-blocking risk,
-// always renders identically across Gmail / Apple Mail / Outlook desktop.
+// Per-store badge: actual official logo on a white tile. We pivoted back to
+// hosted images after Praveen asked for visual consistency with the web
+// cards (which use the same /store-logos/* set). The original concern that
+// killed hosted SVGs — Coles's red wordmark blending into a red badge bg —
+// is solved by putting the logo on a WHITE tile, not the brand-color bg.
+// The card itself still carries the brand-color via the 4px left stripe,
+// so the colour cue is preserved.
 //
-// Each store gets a brand-colored pill with brand-typography text:
-//   - Coles: red bg, white "coles" lowercase
-//   - Woolworths: green bg, white "Woolworths" wordmark
-//   - Aldi: blue bg, yellow "ALDI" wordmark (matches Aldi's actual color combo)
+// Stable URLs on the production domain (Vercel preview URLs rotate per
+// deploy, so we don't use those). Sizes computed to fit a 28px-tall badge:
+//   Coles SVG 103x32 wordmark → 92 wide x 28 tall
+//   Woolies PNG 108x96 apple-W → 28 wide x 28 tall (square-ish)
+//   Aldi SVG 135x150 shield   → 26 wide x 28 tall (slightly taller than wide)
+const STORE_LOGO = {
+  coles:      { url: 'https://cheapasmate.com/store-logos/coles.svg',      w: 92, h: 28, alt: 'Coles' },
+  woolworths: { url: 'https://cheapasmate.com/store-logos/woolworths.png', w: 28, h: 28, alt: 'Woolworths' },
+  aldi:       { url: 'https://cheapasmate.com/store-logos/aldi.svg',       w: 26, h: 28, alt: 'ALDI' },
+}
+// Kept as text fallback when an image gets blocked AND the alt text needs
+// to look intentional rather than naked filename. Outlook in particular
+// may not render SVG; the alt is the visible fallback.
 const STORE_LABEL = {
-  coles:      { text: 'coles',      weight: 800, letterSpacing: '0.5px', case: 'normal' },
-  woolworths: { text: 'Woolworths', weight: 800, letterSpacing: '0.3px', case: 'normal' },
-  aldi:       { text: 'ALDI',       weight: 900, letterSpacing: '1.5px', case: 'normal' },
+  coles:      'Coles',
+  woolworths: 'Woolworths',
+  aldi:       'ALDI',
 }
 // Mirror of pricemate/lib/imageUrl.ts:bestImage — applied server-side so the
 // email digest pulls higher-resolution Aldi images (Scene7 dynamic-resize).
@@ -98,10 +117,13 @@ function bestImage(url) {
 }
 
 function storeBadgeHtml(store) {
-  const b = STORE_BRAND[store]
-  const l = STORE_LABEL[store]
-  if (!b || !l) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase">${esc(store)}</span>`
-  return `<span style="display:inline-block;background:${b.bg};color:${b.fg};padding:5px 14px;border-radius:6px;font-family:Helvetica,Arial,sans-serif;font-weight:${l.weight};font-size:13px;letter-spacing:${l.letterSpacing};line-height:1;vertical-align:middle">${esc(l.text)}</span>`
+  const logo = STORE_LOGO[store]
+  if (!logo) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase">${esc(store)}</span>`
+  // White tile holds the logo. Same treatment as the web cards — lets the
+  // real brand colour sit on the logo itself (Coles wordmark = red, Aldi
+  // shield = blue+yellow) without bg blending. The alt text is the brand
+  // name so if a client blocks images, the user still sees "Coles" / etc.
+  return `<span style="display:inline-block;background:#FFFFFF;padding:5px 10px;border-radius:6px;line-height:0;vertical-align:middle"><img src="${esc(logo.url)}" alt="${esc(logo.alt)}" width="${logo.w}" height="${logo.h}" style="display:inline-block;height:${logo.h}px;width:${logo.w}px;vertical-align:middle"></span>`
 }
 
 // Digest email — one email, N product cards inside, each with the store's
@@ -353,7 +375,7 @@ async function sendDigest(sub, products) {
     store: p.store,
     currentPrice: parseFloat(p.current_price),
     normalPrice: parseFloat(p.normal_price),
-    productUrl: storeUrl[p.store]?.(p.product_id) || APP_BASE_URL,
+    productUrl: storeUrl[p.store]?.(p.product_id, p.name) || APP_BASE_URL,
     image: bestImage(p.image),
   }))
 
