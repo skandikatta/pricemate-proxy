@@ -115,11 +115,15 @@ function mapWoolworths(p) {
 // filter/sort. Coles + Woolies upstream calls are independent so we run
 // them in parallel; within each store we fetch page 1, then in parallel
 // fetch pages 2..N up to MAX_PAGES based on the noOfResults header.
-// Tuned so we can match what Coles + Woolies show on their own sites:
-// Coles "milk" = 137 results; 4 pages × 48 covers it.
-// Woolies "milk" = 304 results; 9 pages × 36 covers it.
-const MAX_COLES_PAGES = 6
-const MAX_WOOLIES_PAGES = 9
+// Tuned so we can match what Coles + Woolies show on their own sites for
+// any realistic single-keyword search.
+//   Coles "milk" = 137, "fruit" = 306, "snacks" hundreds — cap 20 × 48 = 960.
+//   Woolies "milk" = 304, "fruit" likely 500+ — cap 20 × 36 = 720.
+// `Math.ceil(noOfResults / pageSize)` already drives the real page count
+// so light queries don't waste fetches; the cap is only a safety net for
+// catch-all queries that could return thousands.
+const MAX_COLES_PAGES = 20
+const MAX_WOOLIES_PAGES = 20
 const COLES_PAGE_SIZE = 48
 const WOOLIES_PAGE_SIZE = 36
 
