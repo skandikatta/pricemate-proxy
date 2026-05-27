@@ -87,16 +87,18 @@ function esc(s) {
 // The card itself still carries the brand-color via the 4px left stripe,
 // so the colour cue is preserved.
 //
-// Stable URLs on the production domain (Vercel preview URLs rotate per
-// deploy, so we don't use those). Sizes tuned so the three logos feel
-// visually balanced — Coles is a wide wordmark while Woolies/Aldi are
-// square-ish marks, so we run the wordmark shorter to match optical
-// weight rather than measured height. Final sizes:
-//   Coles SVG 103x32 wordmark → 64 wide x 20 tall
-//   Woolies PNG 108x96 apple-W → 22 wide x 22 tall
-//   Aldi SVG 135x150 shield   → 20 wide x 22 tall
+// All three tiles render at a fixed 56×28 size — the logo inside centers
+// horizontally and is scaled to fit. Means Coles (wordmark), Woolies
+// (apple-W), and Aldi (shield) all sit in identically-sized boxes despite
+// having different intrinsic aspect ratios. Logo dims chosen so each
+// stays readable inside the 56×28 box:
+//   Coles wordmark 103×32 → 52×16 (tall margin, wide near-edge-to-edge)
+//   Woolies apple-W → 22×22 (centered, plenty of side padding)
+//   Aldi shield → 20×22 (centered)
+const TILE_W = 56
+const TILE_H = 28
 const STORE_LOGO = {
-  coles:      { url: 'https://cheapasmate.com/store-logos/coles.svg',      w: 64, h: 20, alt: 'Coles' },
+  coles:      { url: 'https://cheapasmate.com/store-logos/coles.svg',      w: 52, h: 16, alt: 'Coles' },
   woolworths: { url: 'https://cheapasmate.com/store-logos/woolworths.png', w: 22, h: 22, alt: 'Woolworths' },
   aldi:       { url: 'https://cheapasmate.com/store-logos/aldi.svg',       w: 20, h: 22, alt: 'ALDI' },
 }
@@ -122,11 +124,11 @@ function bestImage(url) {
 function storeBadgeHtml(store) {
   const logo = STORE_LOGO[store]
   if (!logo) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase">${esc(store)}</span>`
-  // White tile holds the logo. Same treatment as the web cards — lets the
-  // real brand colour sit on the logo itself (Coles wordmark = red, Aldi
-  // shield = blue+yellow) without bg blending. The alt text is the brand
-  // name so if a client blocks images, the user still sees "Coles" / etc.
-  return `<span style="display:inline-block;background:#FFFFFF;padding:4px 8px;border-radius:5px;line-height:0;vertical-align:middle"><img src="${esc(logo.url)}" alt="${esc(logo.alt)}" width="${logo.w}" height="${logo.h}" style="display:inline-block;height:${logo.h}px;width:${logo.w}px;vertical-align:middle"></span>`
+  // Fixed-size white tile (TILE_W × TILE_H) with logo centred inside. All
+  // three store tiles end up identical dimensions even though Coles is a
+  // wordmark and Woolies/Aldi are square marks. Alt text fallback for
+  // image-blocked clients.
+  return `<span style="display:inline-block;width:${TILE_W}px;height:${TILE_H}px;background:#FFFFFF;border-radius:5px;text-align:center;line-height:${TILE_H}px;vertical-align:middle"><img src="${esc(logo.url)}" alt="${esc(logo.alt)}" width="${logo.w}" height="${logo.h}" style="display:inline-block;height:${logo.h}px;width:${logo.w}px;vertical-align:middle"></span>`
 }
 
 // Digest email — one email, N product cards inside, each with the store's
