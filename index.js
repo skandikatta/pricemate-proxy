@@ -191,8 +191,12 @@ app.get('/api/search', async (req, res) => {
   ])
   // Dedup by (store, productId) — paginated fetches can return overlapping
   // products at page boundaries when the upstream re-sorts mid-traversal.
+  // Also drop $0 / null-price items — these are typically unavailable
+  // products or per-kg items the upstream lists without a unit price.
+  // Showing "Persimmon Fresh $0.00 $2.00" is worse than not showing it.
   const seen = new Set()
   const products = [...colesProducts, ...wooliesProducts].filter(p => {
+    if (!p.price || p.price <= 0) return false
     const k = `${p.store}|${p.productId}`
     if (seen.has(k)) return false
     seen.add(k); return true
