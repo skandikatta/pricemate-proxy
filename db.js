@@ -111,6 +111,210 @@ async function getStoreProductCount(store) {
   return rows[0]?.n ?? 0
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Option C — internal_id (passport) + product_aliases (phone numbers).
+//
+// Shadow writes: when OPTION_C_SHADOW_WRITE=1, every upsertProducts +
+// insertPriceChanges call ALSO writes to products_v2 / product_aliases /
+// price_history_v2. The existing vendor-keyed writes still happen — Option B
+// stays in force as the source of truth until predictions explicitly cut over.
+//
+// Rename detection (linking a new vendor_id to an existing internal_id when
+// the retailer has rebranded an SKU) is intentionally NOT done inline. It's
+// in detect-renames.js as an offline pass with brand+size guards. Inline
+// fuzzy-matching was the 757caeb bug class — we don't repeat it.
+//
+// Setup order (see pricemate-proxy/OPTION_C_RUNBOOK.md):
+//   1. Apply pricemate/migrations/005_option_c_passport_aliases.sql
+//   2. Run backfill-internal-ids.js --apply
+//   3. Turn on OPTION_C_SHADOW_WRITE=1 in the scraper env
+//   4. Watch v2 tables grow alongside v1 for a few days
+//   5. Run detect-renames.js periodically (manual review queue)
+//   6. Cut predictions over to read v2 (later commit)
+//   7. Drop v1 tables in migration 006 (later, after sustained verification)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SHADOW_WRITE_V2 = process.env.OPTION_C_SHADOW_WRITE === '1'
+
+async function shadowUpsertProductsV2(products) {
+  if (!SHADOW_WRITE_V2 || !products.length) return
+
+  // Batch-fetch existing aliases so we know which products already have a
+  // passport (just bump last_seen) vs need a new passport minted.
+  const stores = products.map(p => p.store)
+  const vendorIds = products.map(p => p.product_id)
+  const { rows: existingRows } = await pool.query(
+    `SELECT pa.store, pa.vendor_id, pa.internal_id
+       FROM product_aliases pa
+       JOIN UNNEST($1::text[], $2::text[]) AS k(store, vendor_id)
+         ON pa.store = k.store AND pa.vendor_id = k.vendor_id`,
+    [stores, vendorIds]
+  )
+  const aliasMap = new Map()
+  for (const r of existingRows) aliasMap.set(`${r.store}_${r.vendor_id}`, r.internal_id)
+
+  const newProducts = products.filter(p => !aliasMap.has(`${p.store}_${p.product_id}`))
+  const existing    = products.filter(p =>  aliasMap.has(`${p.store}_${p.product_id}`))
+
+  // Mint passports + aliases for new vendor_ids. Each gets a fresh internal_id
+  // (no rename stitching here — that's detect-renames.js's job offline).
+  for (let i = 0; i < newProducts.length; i += 500) {
+    const batch = newProducts.slice(i, i + 500)
+    // INSERT products_v2 in one statement, RETURNING the minted internal_ids
+    const passportValues = batch.map((_, j) => {
+      const b = j * 6
+      return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6})`
+    }).join(',')
+    const passportParams = batch.flatMap(p => [
+      p.name, p.brand || null, p.size || null, p.category || null, p.image || null, p.barcode || null,
+    ])
+    const { rows: minted } = await pool.query(
+      `INSERT INTO products_v2 (canonical_name, brand, size, category, image, barcode)
+       VALUES ${passportValues}
+       RETURNING internal_id`,
+      passportParams
+    )
+    // The RETURNING order matches the INSERT order (Postgres guarantee), so
+    // zip back to batch[i] → minted[i]
+    const aliasValues = batch.map((_, j) => {
+      const b = j * 4
+      return `($${b+1},$${b+2},$${b+3},$${b+4})`
+    }).join(',')
+    const aliasParams = batch.flatMap((p, j) => [
+      minted[j].internal_id, p.store, p.product_id, p.name,
+    ])
+    await pool.query(
+      `INSERT INTO product_aliases (internal_id, store, vendor_id, vendor_name)
+       VALUES ${aliasValues}
+       ON CONFLICT (store, vendor_id) DO NOTHING`,
+      aliasParams
+    )
+    batch.forEach((p, j) => aliasMap.set(`${p.store}_${p.product_id}`, minted[j].internal_id))
+  }
+
+  // For existing aliases: bump last_seen + refresh canonical metadata in case
+  // the retailer changed the product page since first scrape.
+  if (existing.length) {
+    const ids = existing.map(p => aliasMap.get(`${p.store}_${p.product_id}`))
+    await pool.query(
+      `UPDATE product_aliases
+          SET last_seen = CURRENT_DATE, active = TRUE
+        WHERE internal_id = ANY($1::uuid[])`,
+      [ids]
+    )
+    await pool.query(
+      `UPDATE products_v2
+          SET last_seen = CURRENT_DATE
+        WHERE internal_id = ANY($1::uuid[])`,
+      [ids]
+    )
+  }
+
+  return aliasMap
+}
+
+async function shadowInsertPriceHistoryV2(prices) {
+  if (!SHADOW_WRITE_V2 || !prices.length) return
+
+  // Resolve all (store, vendor_id) → internal_id from product_aliases.
+  // Anything missing means upsertProducts wasn't called first (shouldn't
+  // happen) or the scraper sent a price for a product not in its own
+  // products list (data bug). Silent skip rather than crash.
+  const stores = prices.map(p => p.store)
+  const vendorIds = prices.map(p => p.product_id)
+  const { rows } = await pool.query(
+    `SELECT pa.store, pa.vendor_id, pa.internal_id
+       FROM product_aliases pa
+       JOIN UNNEST($1::text[], $2::text[]) AS k(store, vendor_id)
+         ON pa.store = k.store AND pa.vendor_id = k.vendor_id`,
+    [stores, vendorIds]
+  )
+  const map = new Map()
+  for (const r of rows) map.set(`${r.store}_${r.vendor_id}`, r.internal_id)
+
+  // Mirror the existing change-only filter so v2 has identical density to v1.
+  // This keeps Option B semantics intact during the dual-write period.
+  const resolved = prices.flatMap(p => {
+    const internal_id = map.get(`${p.store}_${p.product_id}`)
+    return internal_id ? [{ ...p, internal_id }] : []
+  })
+  if (!resolved.length) return
+
+  const ids = resolved.map(p => p.internal_id)
+  const storeArr = resolved.map(p => p.store)
+  const { rows: lastRows } = await pool.query(
+    `SELECT DISTINCT ON (internal_id, store) internal_id, store, price
+       FROM price_history_v2
+       WHERE (internal_id, store) IN (
+         SELECT * FROM UNNEST($1::uuid[], $2::text[])
+       )
+       ORDER BY internal_id, store, scraped_at DESC`,
+    [ids, storeArr]
+  )
+  const lastByKey = new Map()
+  for (const r of lastRows) lastByKey.set(`${r.internal_id}_${r.store}`, parseFloat(r.price))
+
+  const changed = resolved.filter(p => {
+    const last = lastByKey.get(`${p.internal_id}_${p.store}`)
+    return last === undefined || last !== parseFloat(p.price)
+  })
+  if (!changed.length) return
+
+  // 5 placeholders per row (internal_id, store, price, was_price, is_on_special)
+  // — scraped_at defaults to NOW() at INSERT time. 5 × 12000 = 60000, under
+  // the 65535 placeholder cap.
+  for (let i = 0; i < changed.length; i += 12000) {
+    const batch = changed.slice(i, i + 12000)
+    const values = batch.map((_, j) => {
+      const b = j * 5
+      return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5})`
+    }).join(',')
+    const params = batch.flatMap(p => [
+      p.internal_id, p.store, p.price, p.was_price || null, p.is_on_special || false,
+    ])
+    await pool.query(
+      `INSERT INTO price_history_v2 (internal_id, store, price, was_price, is_on_special)
+       VALUES ${values}
+       ON CONFLICT (internal_id, store, (scraped_at::date))
+       DO UPDATE SET
+         price = EXCLUDED.price,
+         was_price = EXCLUDED.was_price,
+         is_on_special = EXCLUDED.is_on_special`,
+      params
+    )
+  }
+}
+
+// Wrap the existing upsertProducts / insertPriceChanges so shadow writes run
+// automatically after the v1 path completes. Scrapers don't need to change.
+const _upsertProductsV1 = upsertProducts
+async function upsertProductsWrapped(products) {
+  await _upsertProductsV1(products)
+  if (SHADOW_WRITE_V2) {
+    try { await shadowUpsertProductsV2(products) }
+    catch (e) { console.warn(`  [shadow-v2 upsert] ${e.message}`) }
+  }
+}
+
+const _insertPriceChangesV1 = insertPriceChanges
+async function insertPriceChangesWrapped(prices) {
+  const changed = await _insertPriceChangesV1(prices)
+  if (SHADOW_WRITE_V2) {
+    try { await shadowInsertPriceHistoryV2(prices) }
+    catch (e) { console.warn(`  [shadow-v2 price] ${e.message}`) }
+  }
+  return changed
+}
+
 async function close() { await pool.end() }
 
-module.exports = { upsertProducts, insertPriceChanges, close, normalizeName, getStoreProductCount }
+module.exports = {
+  upsertProducts: upsertProductsWrapped,
+  insertPriceChanges: insertPriceChangesWrapped,
+  close,
+  normalizeName,
+  getStoreProductCount,
+  // Exposed for tests + the future cutover commit:
+  shadowUpsertProductsV2,
+  shadowInsertPriceHistoryV2,
+}
