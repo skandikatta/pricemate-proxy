@@ -121,7 +121,9 @@ async function searchColes(q) {
     if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
       const data = await r.json()
       const results = data?.pageProps?.searchResults?.results || []
-      return results.filter(p => p._type === 'PRODUCT').slice(0, 12).map(mapColes)
+      // Bumped 12 → 48 (2026-05-27): matches Coles's own first-page count
+      // for the same search and removes the "only 12 milks?" UX surprise.
+      return results.filter(p => p._type === 'PRODUCT').slice(0, 48).map(mapColes)
     }
     console.warn(`[search:coles] non-ok or non-json: HTTP ${r.status} content-type=${r.headers.get('content-type')}`)
     return []
@@ -135,7 +137,8 @@ async function searchWoolworths(q) {
   try {
     const data = await woolworthsSearch(q)
     if (data?.Products) {
-      return data.Products.flatMap(g => g.Products || []).slice(0, 12).map(mapWoolworths)
+      // Bumped 12 → 48 (2026-05-27) — see Coles searchColes() rationale.
+      return data.Products.flatMap(g => g.Products || []).slice(0, 48).map(mapWoolworths)
     }
     console.warn('[search:woolworths] no Products in response')
     return []
