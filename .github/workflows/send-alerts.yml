@@ -1,18 +1,32 @@
 name: Send sale alerts
 
-# Runs 90 min after the latest scrape finishes (Coles=19:00, Woolies=19:00,
-# Aldi=19:30 UTC). 21:00 UTC ≈ 7:00 AEST — alerts land before users start
-# checking phones for the day.
+# Triggers after Scrape Woolworths completes — Woolies is the slowest of the
+# three (~1h43m) so by the time it finishes, Coles + Aldi are also done.
+# Eliminates the "alerts fired before Aldi's late re-run" race that surfaced
+# 2026-05-28 when Aldi got pushed to 22:50 UTC by GH queue jitter.
+#
+# Fallback cron at 23:00 UTC fires if Woolworths run never completes (catches
+# the case where Woolies workflow gets cancelled/never starts).
+#
+# send-alerts.js has internal dedup (skipped_dedup counter) so double-firing
+# does NOT produce duplicate user emails — it just costs a few extra seconds.
 
 on:
+  workflow_run:
+    workflows: ["Scrape Woolworths"]
+    types: [completed]
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 23 * * *"
   workflow_dispatch:
 
 jobs:
   send:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # When triggered by workflow_run, only proceed if the parent scrape finished
+    # (success OR failure — partial data is still better than no data). When
+    # triggered by cron / manual, always run.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled' }}
     steps:
       - uses: actions/checkout@v4
 
