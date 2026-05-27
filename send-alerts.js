@@ -86,6 +86,17 @@ const STORE_LABEL = {
   woolworths: { text: 'Woolworths', weight: 800, letterSpacing: '0.3px', case: 'normal' },
   aldi:       { text: 'ALDI',       weight: 900, letterSpacing: '1.5px', case: 'normal' },
 }
+// Mirror of pricemate/lib/imageUrl.ts:bestImage — applied server-side so the
+// email digest pulls higher-resolution Aldi images (Scene7 dynamic-resize).
+// Coles/Woolies pass through unchanged.
+function bestImage(url) {
+  if (!url) return ''
+  if (url.includes('dm.apac.cms.aldi.cx') && url.includes('/scaleWidth/')) {
+    return url.replace(/\/scaleWidth\/\d+\//, '/scaleWidth/600/')
+  }
+  return url
+}
+
 function storeBadgeHtml(store) {
   const b = STORE_BRAND[store]
   const l = STORE_LABEL[store]
@@ -107,31 +118,46 @@ function renderDigestHtml({ items, scope, unsubscribeUrl }) {
     //   1. Badge (left) + % OFF chip (right)
     //   2. Full-width product name
     //   3. Price (left) + View button (right)
+    // Product thumbnail on the left. We use a white background tile so the
+    // product photography (which is shot on white at all three retailers)
+    // looks correct in both light and dark email clients. If the product has
+    // no image, the cell renders an empty white square — harmless, keeps the
+    // layout grid intact.
+    const imageCell = it.image
+      ? `<img src="${esc(it.image)}" alt="" width="72" height="72" style="display:block;width:72px;height:72px;object-fit:contain;background:#FFFFFF;border-radius:8px;padding:6px;border:1px solid rgba(255,255,255,0.04)">`
+      : `<div style="width:72px;height:72px;background:#FFFFFF;border-radius:8px"></div>`
     return `<div style="margin-bottom:12px;border-radius:12px;overflow:hidden;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06)">
   <table style="width:100%;border-collapse:collapse" role="presentation">
     <tr>
       <td style="width:4px;background:${brand.bg};padding:0"></td>
       <td style="padding:14px 16px">
-        <!-- Row 1: badge + %OFF chip -->
         <table style="width:100%" role="presentation"><tr>
-          <td style="vertical-align:middle">${storeBadgeHtml(it.store)}</td>
-          <td style="vertical-align:middle;text-align:right">
-            <span style="display:inline-block;background:#fbbf24;color:#080520;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:0.05em;line-height:1">${pctOff}% OFF</span>
-          </td>
-        </tr></table>
+          <!-- Left: product thumbnail -->
+          <td style="width:80px;vertical-align:top;padding-right:12px">${imageCell}</td>
+          <!-- Right: badge / name / price / CTA stacked -->
+          <td style="vertical-align:top">
+            <!-- Row 1: badge + %OFF chip -->
+            <table style="width:100%" role="presentation"><tr>
+              <td style="vertical-align:middle">${storeBadgeHtml(it.store)}</td>
+              <td style="vertical-align:middle;text-align:right">
+                <span style="display:inline-block;background:#fbbf24;color:#080520;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:0.05em;line-height:1">${pctOff}% OFF</span>
+              </td>
+            </tr></table>
 
-        <!-- Row 2: product name (full-width, left-aligned) -->
-        <p style="margin:12px 0 10px 0;font-size:15px;font-weight:600;color:#f1f0ff;line-height:1.35;letter-spacing:-0.01em">${esc(it.productName)}</p>
+            <!-- Row 2: product name -->
+            <p style="margin:10px 0 8px 0;font-size:15px;font-weight:600;color:#f1f0ff;line-height:1.35;letter-spacing:-0.01em">${esc(it.productName)}</p>
 
-        <!-- Row 3: price (left) + View button (right) -->
-        <table style="width:100%" role="presentation"><tr>
-          <td style="vertical-align:middle">
-            <span style="font-size:20px;font-weight:700;color:#fbbf24;letter-spacing:-0.01em">$${it.currentPrice.toFixed(2)}</span>
-            <span style="font-size:13px;color:#9ca3af;font-weight:500;text-decoration:line-through;margin-left:6px">$${it.normalPrice.toFixed(2)}</span>
-            <div style="font-size:11px;color:#9ca3af;margin-top:4px">save $${savings}</div>
-          </td>
-          <td style="vertical-align:middle;text-align:right;white-space:nowrap">
-            <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;display:inline-block">View at ${esc(STORE_NAME[it.store])} &rarr;</a>
+            <!-- Row 3: price + CTA -->
+            <table style="width:100%" role="presentation"><tr>
+              <td style="vertical-align:middle">
+                <span style="font-size:20px;font-weight:700;color:#fbbf24;letter-spacing:-0.01em">$${it.currentPrice.toFixed(2)}</span>
+                <span style="font-size:13px;color:#9ca3af;font-weight:500;text-decoration:line-through;margin-left:6px">$${it.normalPrice.toFixed(2)}</span>
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px">save $${savings}</div>
+              </td>
+              <td style="vertical-align:middle;text-align:right;white-space:nowrap">
+                <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;display:inline-block">View &rarr;</a>
+              </td>
+            </tr></table>
           </td>
         </tr></table>
       </td>
@@ -265,7 +291,7 @@ async function findProductsOnSale() {
            COALESCE(NULLIF(r.was_price, 0), h.mode_price) AS normal_price,
            r.was_price,
            h.mode_price,
-           p.name, p.brand, p.size, p.category, h.records,
+           p.name, p.brand, p.size, p.category, p.image, h.records,
            h.hist_min, h.hist_max,
            -- Percent savings for ordering — pick the deepest discounts first
            -- since the cap is 5 per user per email.
@@ -328,6 +354,7 @@ async function sendDigest(sub, products) {
     currentPrice: parseFloat(p.current_price),
     normalPrice: parseFloat(p.normal_price),
     productUrl: storeUrl[p.store]?.(p.product_id) || APP_BASE_URL,
+    image: bestImage(p.image),
   }))
 
   const subject = digestSubject(items, sub.scope)
