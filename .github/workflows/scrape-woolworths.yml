@@ -19,3 +19,4 @@ jobs:
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          OPTION_C_SHADOW_WRITE: "1"
