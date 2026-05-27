@@ -128,34 +128,74 @@ async function findActiveSubscriptions() {
 }
 
 async function findProductsOnSale() {
-  // "On sale today" = the most recent price_history row for the product is
-  // <= 85% of the mode (most-common) price across the last 180 days.
-  // Computed in SQL for efficiency vs N round-trips per product.
+  // "On sale today" detection with three quality gates baked into SQL:
+  //
+  //   1. Use Coles's own `was_price` as the canonical normal price when
+  //      present. Coles tells us "this is on sale, the regular price is X" —
+  //      we should trust that over mode() of sparse history. mode() was
+  //      giving wrong answers (e.g. picking $18.50 as "normal" for a Cream
+  //      product whose real regular price is $11.50, because $18.50 happened
+  //      to be in the table twice).
+  //   2. Fall back to mode only when was_price is null/zero, AND require at
+  //      least 7 records to consider the mode trustworthy.
+  //   3. Reject "products" that look like garbage data:
+  //        - name shorter than 10 chars (e.g. literal "Cream" / "Bananas")
+  //        - savings > 60% (likely scraper noise, not a real half-price)
+  //        - was_price disagrees with mode by >2× (volatile noise like the
+  //          $39.50 cream / $5 bananas)
+  //      These are conservative — better to under-alert than burn user trust.
   const { rows } = await pool.query(`
     WITH recent AS (
       SELECT DISTINCT ON (store, product_id)
-        store, product_id, price AS current_price, scraped_at
+        store, product_id,
+        price AS current_price,
+        was_price,
+        scraped_at
       FROM price_history
       WHERE scraped_at >= NOW() - INTERVAL '2 days'
       ORDER BY store, product_id, scraped_at DESC
     ),
-    mode AS (
+    history AS (
       SELECT store, product_id,
-             mode() WITHIN GROUP (ORDER BY price) AS normal_price,
-             COUNT(*) AS records
+             mode() WITHIN GROUP (ORDER BY price) AS mode_price,
+             COUNT(*) AS records,
+             MIN(price) AS hist_min,
+             MAX(price) AS hist_max
       FROM price_history
       WHERE scraped_at >= NOW() - INTERVAL '180 days'
       GROUP BY store, product_id
-      HAVING COUNT(*) >= 5
     )
-    SELECT r.store, r.product_id, r.current_price, m.normal_price,
-           p.name, p.brand, p.size, m.records
+    SELECT r.store, r.product_id, r.current_price,
+           -- Trust Coles's was_price first; fall back to mode if missing.
+           COALESCE(NULLIF(r.was_price, 0), h.mode_price) AS normal_price,
+           r.was_price,
+           h.mode_price,
+           p.name, p.brand, p.size, p.category, h.records,
+           h.hist_min, h.hist_max,
+           -- Percent savings for ordering — pick the deepest discounts first
+           -- since the cap is 5 per user per email.
+           (1 - r.current_price / COALESCE(NULLIF(r.was_price, 0), h.mode_price)) AS savings_pct
     FROM recent r
-    JOIN mode m ON m.store = r.store AND m.product_id = r.product_id
+    JOIN history h ON h.store = r.store AND h.product_id = r.product_id
     JOIN products p ON p.store = r.store AND p.product_id = r.product_id
-    WHERE r.current_price <= m.normal_price * $1
-      AND r.current_price > 0
+    WHERE r.current_price > 0
       AND p.name IS NOT NULL
+      AND LENGTH(p.name) >= 10
+      AND (
+        -- Path A: trust was_price if present and a genuine sale
+        (r.was_price IS NOT NULL AND r.was_price > 0
+         AND r.current_price <= r.was_price * $1)
+        OR
+        -- Path B: no was_price → require strong history signal
+        ((r.was_price IS NULL OR r.was_price = 0)
+         AND h.records >= 7
+         AND r.current_price <= h.mode_price * $1
+         -- volatility guard: drop products where history is wildly noisy
+         AND h.hist_max <= h.hist_min * 2.5)
+      )
+      -- Reject implausible savings (>60% off) — almost always scraper noise
+      AND r.current_price >= COALESCE(NULLIF(r.was_price, 0), h.mode_price) * 0.40
+    ORDER BY savings_pct DESC, r.current_price ASC
   `, [SALE_THRESHOLD])
   return rows
 }
