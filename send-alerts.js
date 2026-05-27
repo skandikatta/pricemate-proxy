@@ -88,14 +88,17 @@ function esc(s) {
 // so the colour cue is preserved.
 //
 // Stable URLs on the production domain (Vercel preview URLs rotate per
-// deploy, so we don't use those). Sizes computed to fit a 28px-tall badge:
-//   Coles SVG 103x32 wordmark → 92 wide x 28 tall
-//   Woolies PNG 108x96 apple-W → 28 wide x 28 tall (square-ish)
-//   Aldi SVG 135x150 shield   → 26 wide x 28 tall (slightly taller than wide)
+// deploy, so we don't use those). Sizes tuned so the three logos feel
+// visually balanced — Coles is a wide wordmark while Woolies/Aldi are
+// square-ish marks, so we run the wordmark shorter to match optical
+// weight rather than measured height. Final sizes:
+//   Coles SVG 103x32 wordmark → 64 wide x 20 tall
+//   Woolies PNG 108x96 apple-W → 22 wide x 22 tall
+//   Aldi SVG 135x150 shield   → 20 wide x 22 tall
 const STORE_LOGO = {
-  coles:      { url: 'https://cheapasmate.com/store-logos/coles.svg',      w: 92, h: 28, alt: 'Coles' },
-  woolworths: { url: 'https://cheapasmate.com/store-logos/woolworths.png', w: 28, h: 28, alt: 'Woolworths' },
-  aldi:       { url: 'https://cheapasmate.com/store-logos/aldi.svg',       w: 26, h: 28, alt: 'ALDI' },
+  coles:      { url: 'https://cheapasmate.com/store-logos/coles.svg',      w: 64, h: 20, alt: 'Coles' },
+  woolworths: { url: 'https://cheapasmate.com/store-logos/woolworths.png', w: 22, h: 22, alt: 'Woolworths' },
+  aldi:       { url: 'https://cheapasmate.com/store-logos/aldi.svg',       w: 20, h: 22, alt: 'ALDI' },
 }
 // Kept as text fallback when an image gets blocked AND the alt text needs
 // to look intentional rather than naked filename. Outlook in particular
@@ -123,7 +126,7 @@ function storeBadgeHtml(store) {
   // real brand colour sit on the logo itself (Coles wordmark = red, Aldi
   // shield = blue+yellow) without bg blending. The alt text is the brand
   // name so if a client blocks images, the user still sees "Coles" / etc.
-  return `<span style="display:inline-block;background:#FFFFFF;padding:5px 10px;border-radius:6px;line-height:0;vertical-align:middle"><img src="${esc(logo.url)}" alt="${esc(logo.alt)}" width="${logo.w}" height="${logo.h}" style="display:inline-block;height:${logo.h}px;width:${logo.w}px;vertical-align:middle"></span>`
+  return `<span style="display:inline-block;background:#FFFFFF;padding:4px 8px;border-radius:5px;line-height:0;vertical-align:middle"><img src="${esc(logo.url)}" alt="${esc(logo.alt)}" width="${logo.w}" height="${logo.h}" style="display:inline-block;height:${logo.h}px;width:${logo.w}px;vertical-align:middle"></span>`
 }
 
 // Digest email — one email, N product cards inside, each with the store's
