@@ -58,9 +58,9 @@ const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
 // semantics (where competitors use green); store-brand greens are
 // legitimate identity here, not rule violations.
 const STORE_BRAND = {
-  coles:      { bg: '#E01A22', fg: '#FFFFFF', letter: 'C' },
-  woolworths: { bg: '#178740', fg: '#FFFFFF', letter: 'W' },
-  aldi:       { bg: '#00549A', fg: '#FFCB05', letter: 'A' },
+  coles:      { bg: '#E01A22', fg: '#FFFFFF', letter: 'C', logoW: 80 },
+  woolworths: { bg: '#178740', fg: '#FFFFFF', letter: 'W', logoW: 28 },
+  aldi:       { bg: '#00549A', fg: '#FFCB05', letter: 'A', logoW: 64 },
 }
 
 // HTML escape — every user-controlled value goes through this before
@@ -69,17 +69,22 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-// Render a per-store badge: 22px square with the store's first letter in
-// brand colors, paired with the store name. Inline-rendered for email
-// reliability (no image hosting, no broken-image fallback risk).
+// Per-store branded logo — hosted SVG with CSS fallback for clients
+// that block images (Gmail blocks images by default for first-time senders).
+// The fallback is a colored badge with the store's first letter, so the
+// brand color always lands even when the image is hidden.
 function storeBadgeHtml(store) {
   const b = STORE_BRAND[store]
   const name = STORE_NAME[store] || store
   if (!b) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">${esc(name)}</span>`
-  return `<span style="display:inline-block;vertical-align:middle">
-    <span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;background:${b.bg};color:${b.fg};border-radius:6px;font-size:13px;font-weight:800;vertical-align:middle">${b.letter}</span>
-    <span style="display:inline-block;margin-left:6px;font-size:12px;font-weight:700;color:${b.bg};letter-spacing:0.02em;vertical-align:middle">${esc(name)}</span>
-  </span>`
+  const logoUrl = `${APP_BASE_URL}/store-logos/${store}.svg`
+  // Use a table-cell wrapper for the fallback so Outlook (which strips img)
+  // still shows the colored background + alt text as a recognizable badge.
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display:inline-block;vertical-align:middle"><tr>
+    <td style="background:${b.bg};border-radius:4px;line-height:0;font-size:0;padding:0;height:28px;width:${b.logoW}px;text-align:center;vertical-align:middle">
+      <img src="${esc(logoUrl)}" width="${b.logoW}" height="28" alt="${esc(name)}" style="display:inline-block;border:0;outline:none;text-decoration:none;height:28px;width:${b.logoW}px;color:${b.fg};font-family:Helvetica,Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:0.05em">
+    </td>
+  </tr></table>`
 }
 
 // Digest email — one email, N product cards inside, each with the store's
