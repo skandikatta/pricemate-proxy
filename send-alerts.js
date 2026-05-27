@@ -74,20 +74,22 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-// Per-store branded logo — hosted SVG with CSS fallback for clients
-// that block images (Gmail blocks images by default for first-time senders).
-// The fallback is a colored badge with the store's first letter, so the
-// brand color always lands even when the image is hidden.
+// Per-store branded logo — hosted official mark on a white cell so the
+// brand colors inside each logo render correctly (Coles red wordmark
+// would otherwise blend into a red cell background).
+//
+// Image-blocked fallback: the white cell shows with a thin brand-colored
+// border + the store name as alt text. Less colorful than a filled badge
+// but still identifies the source. Most users (Gmail confirmed sender,
+// Apple Mail, Outlook.com) see the official logo directly.
 function storeBadgeHtml(store) {
   const b = STORE_BRAND[store]
   const name = STORE_NAME[store] || store
   if (!b) return `<span style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">${esc(name)}</span>`
   const logoUrl = `${APP_BASE_URL}/store-logos/${store}.${b.logoExt}`
-  // Use a table-cell wrapper for the fallback so Outlook (which strips img)
-  // still shows the colored background + alt text as a recognizable badge.
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display:inline-block;vertical-align:middle"><tr>
-    <td style="background:${b.bg};border-radius:4px;line-height:0;font-size:0;padding:0;height:28px;width:${b.logoW}px;text-align:center;vertical-align:middle">
-      <img src="${esc(logoUrl)}" width="${b.logoW}" height="28" alt="${esc(name)}" style="display:inline-block;border:0;outline:none;text-decoration:none;height:28px;width:${b.logoW}px;color:${b.fg};font-family:Helvetica,Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:0.05em">
+    <td style="background:#FFFFFF;border:1px solid ${b.bg};border-radius:6px;line-height:0;font-size:0;padding:3px 6px;height:28px;text-align:center;vertical-align:middle">
+      <img src="${esc(logoUrl)}" width="${b.logoW}" height="28" alt="${esc(name)}" style="display:inline-block;border:0;outline:none;text-decoration:none;height:28px;width:${b.logoW}px;color:${b.bg};font-family:Helvetica,Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:0.05em">
     </td>
   </tr></table>`
 }
