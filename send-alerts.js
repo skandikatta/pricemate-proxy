@@ -11,7 +11,7 @@
 //   DB_HOST, DB_PASSWORD             — Postgres on Oracle VM
 //   RESEND_API_KEY                   — Resend API key
 //   APP_BASE_URL                     — e.g. https://cheapasmate.com
-//   FROM_ADDRESS                     — e.g. "PriceMate <alerts@cheapasmate.com>"
+//   FROM_ADDRESS                     — e.g. "cheapasmate <alerts@cheapasmate.com>"
 //   REPLY_TO_ADDRESS                 — e.g. "hello@cheapasmate.com"
 //
 // Self-contained: HTML template inlined (no @swc/register, no cross-repo
@@ -27,7 +27,7 @@ const { Pool } = require('pg')
 const { Resend } = require('resend')
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'https://cheapasmate.com'
-const FROM_ADDRESS = process.env.FROM_ADDRESS || 'PriceMate <alerts@cheapasmate.com>'
+const FROM_ADDRESS = process.env.FROM_ADDRESS || 'cheapasmate <alerts@cheapasmate.com>'
 const REPLY_TO_ADDRESS = process.env.REPLY_TO_ADDRESS || 'hello@cheapasmate.com'
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const SALE_THRESHOLD = 0.85   // price <= 85% of normal counts as on-sale
@@ -65,7 +65,7 @@ const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
 
 // Each store gets a colored badge using their actual brand color so the
 // email is instantly identifiable by source. Coles red, Woolies green,
-// Aldi blue + yellow. The PriceMate "NO GREEN" rule applies to SAVINGS
+// Aldi blue + yellow. The cheapasmate "NO GREEN" rule applies to SAVINGS
 // semantics (where competitors use green); store-brand greens are
 // legitimate identity here, not rule violations.
 // logoW computed from each official logo's aspect ratio at 28px height:
@@ -208,7 +208,7 @@ function renderDigestHtml({ items, scope, unsubscribeUrl }) {
 <div style="max-width:560px;margin:0 auto;background:#0f0a2a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);overflow:hidden">
   <div style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,0.08)">
     <table style="width:100%" role="presentation"><tr>
-      <td style="vertical-align:middle;font-size:14px;font-weight:700;letter-spacing:-0.01em"><span style="color:#a78bfa">M</span> PriceMate</td>
+      <td style="vertical-align:middle"><img src="https://cheapasmate.com/cheapasmate-logo.png" alt="cheapasmate" width="120" height="32" style="display:inline-block;height:32px;width:auto;vertical-align:middle"></td>
       <td style="vertical-align:middle;text-align:right;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">Sale alerts</td>
     </tr></table>
   </div>
@@ -220,7 +220,7 @@ function renderDigestHtml({ items, scope, unsubscribeUrl }) {
   </div>
   <hr style="border:0;border-top:1px solid rgba(255,255,255,0.08);margin:0">
   <div style="padding:16px 24px">
-    <p style="margin:0;font-size:11px;color:#9ca3af;line-height:1.5">You're getting this because you signed up for PriceMate sale alerts. <a href="${esc(unsubscribeUrl)}" style="color:#a78bfa;text-decoration:underline">Unsubscribe with one click</a>.</p>
+    <p style="margin:0;font-size:11px;color:#9ca3af;line-height:1.5">You're getting this because you signed up for cheapasmate sale alerts. <a href="${esc(unsubscribeUrl)}" style="color:#a78bfa;text-decoration:underline">Unsubscribe with one click</a>.</p>
   </div>
 </div></body></html>`
 }
