@@ -43,3 +43,4 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           FROM_ADDRESS: ${{ secrets.FROM_ADDRESS }}
+          REPLY_TO_ADDRESS: ${{ secrets.REPLY_TO_ADDRESS }}

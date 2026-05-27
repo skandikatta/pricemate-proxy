@@ -27,8 +27,9 @@ const path = require('path')
 // On GH Actions runners we check out both repos in the workflow.
 const AlertEmail = require(path.resolve(__dirname, '../pricemate/emails/AlertEmail')).default
 
-const APP_BASE_URL = process.env.APP_BASE_URL || 'https://pricemate-seven.vercel.app'
-const FROM_ADDRESS = process.env.FROM_ADDRESS || 'PriceMate <onboarding@resend.dev>'
+const APP_BASE_URL = process.env.APP_BASE_URL || 'https://cheapasmate.com'
+const FROM_ADDRESS = process.env.FROM_ADDRESS || 'PriceMate <alerts@cheapasmate.com>'
+const REPLY_TO_ADDRESS = process.env.REPLY_TO_ADDRESS || 'hello@cheapasmate.com'
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const SALE_THRESHOLD = 0.85   // price <= 85% of normal counts as on-sale
 const DEDUP_DAYS = 14         // don't re-alert same product within 14d
@@ -143,6 +144,7 @@ async function sendOne(sub, product) {
   const result = await resend.emails.send({
     from: FROM_ADDRESS,
     to: sub.email,
+    reply_to: REPLY_TO_ADDRESS,
     subject,
     html,
     text,
