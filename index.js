@@ -72,13 +72,18 @@ async function woolworthsBrowse(categoryId, page = 1) {
 
 async function woolworthsSearch(query, page = 1) {
   const cookies = await getWoolworthsCookies()
+  // Body mirrors what woolworths.com.au actually POSTs from their own search
+  // UI (captured live via Playwright 2026-05-27). The key fields that bring
+  // SearchResultsCount in line with their displayed count:
+  //   - IsHideEverydayMarketProducts: false (we had it true, was inflating)
+  //   - ExcludeSearchTypes: ["UntraceableVendors"] (we had nothing — this
+  //     filter is what trims their displayed result count)
   const body = JSON.stringify({
     SearchTerm: query, PageNumber: page, PageSize: 36, SortType: 'TraderRelevance',
     Filters: [], IsSpecial: false, Location: `/shop/search/products?searchTerm=${query}`,
-    // Hide Everyday Market (Woolies' 3rd-party marketplace) so our count
-    // matches what woolworths.com.au shows by default. Without this,
-    // "fruit" returns 720 while their site shows 547.
-    IsHideEverydayMarketProducts: true, GroupEdmVariants: false, EnableAdReRanking: false
+    IsHideEverydayMarketProducts: false, IsHideUnavailableProducts: false,
+    GpBoost: 0, EnableAdReRanking: false, IsRegisteredRewardCardPromotion: false,
+    ExcludeSearchTypes: ['UntraceableVendors'],
   })
   const res = await fetch(`${WOOLWORTHS_BASE}/apis/ui/Search/products`, {
     method: 'POST',
