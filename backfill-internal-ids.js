@@ -32,10 +32,10 @@ const DRY_RUN = !process.argv.includes('--apply')
 const STORES = ['coles', 'woolworths', 'aldi']
 
 const pool = new Pool({
-  host: process.env.DB_HOST,
+  host: process.env.DB_HOST || 'localhost',
   port: 5432,
-  database: 'pricemate',
-  user: 'pricemate',
+  database: process.env.PGDATABASE || 'pricemate',
+  user: process.env.PGUSER || 'pricemate',
   password: process.env.DB_PASSWORD,
   max: 5,
 })
