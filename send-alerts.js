@@ -10,22 +10,21 @@
 // Env (GH Actions secrets):
 //   DB_HOST, DB_PASSWORD             — Postgres on Oracle VM
 //   RESEND_API_KEY                   — Resend API key
-//   APP_BASE_URL                     — e.g. https://pricemate-seven.vercel.app
-//   FROM_ADDRESS                     — e.g. "PriceMate Alerts <alerts@pricemate.app>"
-//                                       (or "PriceMate <onboarding@resend.dev>" in sandbox)
+//   APP_BASE_URL                     — e.g. https://cheapasmate.com
+//   FROM_ADDRESS                     — e.g. "PriceMate <alerts@cheapasmate.com>"
+//   REPLY_TO_ADDRESS                 — e.g. "hello@cheapasmate.com"
 //
-// Local dev: set those in .env.local; if RESEND_API_KEY is missing, the
-// script logs what it would send instead of actually sending. Safe to dry-run.
+// Self-contained: HTML template inlined (no @swc/register, no cross-repo
+// checkout for .tsx templates). The React Email source in
+// skandikatta/pricemate/emails/AlertEmail.tsx is the dev-time reference;
+// when you change the design there, regenerate the renderAlertHtml
+// function below.
+//
+// Local dev: set env in .env; if RESEND_API_KEY is missing, the script
+// logs what it would send instead of actually sending. Safe to dry-run.
 
-require('@swc/register')
 const { Pool } = require('pg')
 const { Resend } = require('resend')
-const { render } = require('@react-email/render')
-const path = require('path')
-
-// Resolve template paths against the frontend repo (sibling checkout on VM).
-// On GH Actions runners we check out both repos in the workflow.
-const AlertEmail = require(path.resolve(__dirname, '../pricemate/emails/AlertEmail')).default
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'https://cheapasmate.com'
 const FROM_ADDRESS = process.env.FROM_ADDRESS || 'PriceMate <alerts@cheapasmate.com>'
@@ -49,6 +48,74 @@ const storeUrl = {
   coles:      (id) => `https://www.coles.com.au/product/${id}`,
   woolworths: (id) => `https://www.woolworths.com.au/shop/productdetails/${id}`,
   aldi:       () => 'https://www.aldi.com.au/groceries/',  // Aldi doesn't have product URLs
+}
+
+const STORE_NAME = { coles: 'Coles', woolworths: 'Woolworths', aldi: 'Aldi' }
+
+// HTML escape — every user-controlled value goes through this before
+// landing in the template string. Same set as alerts.js on the VM.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+// Inline AlertEmail template (mirror of pricemate/emails/AlertEmail.tsx).
+// Inline styles + table layouts so Outlook 2007 renders correctly.
+function renderAlertHtml({ productName, store, currentPrice, normalPrice, cycleDays, productUrl, unsubscribeUrl }) {
+  const savings = (normalPrice - currentPrice).toFixed(2)
+  const pctOff = Math.round(((normalPrice - currentPrice) / normalPrice) * 100)
+  const storeName = STORE_NAME[store] || store
+  const cycleBlurb = cycleDays
+    ? `This product has been half-price roughly every <strong style="color:#f1f0ff">${cycleDays} days</strong> for the last 6 months. Today's price matches the bottom of that cycle — historically the cheapest it gets.`
+    : `Today's price is below 85% of the typical price for this product, based on 6 months of history.`
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body style="background:#080520;font-family:Manrope,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px 12px;color:#f1f0ff">
+<div style="max-width:520px;margin:0 auto;background:#0f0a2a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);overflow:hidden">
+  <div style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,0.08)">
+    <table style="width:100%" role="presentation"><tr>
+      <td style="vertical-align:middle;font-size:14px;font-weight:700;letter-spacing:-0.01em"><span style="color:#a78bfa">M</span> PriceMate</td>
+      <td style="vertical-align:middle;text-align:right;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">Sale alert</td>
+    </tr></table>
+  </div>
+  <div style="padding:24px">
+    <h1 style="margin:0 0 8px 0;font-size:22px;font-weight:700;letter-spacing:-0.02em;line-height:1.2;color:#f1f0ff">${esc(productName)}</h1>
+    <p style="margin:0 0 20px 0;font-size:13px;color:#9ca3af">On sale right now at <strong style="color:#f1f0ff">${esc(storeName)}</strong></p>
+    <div style="padding:16px;border-radius:12px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);margin-bottom:20px">
+      <table style="width:100%" role="presentation"><tr>
+        <td style="vertical-align:middle">
+          <p style="margin:0;font-size:28px;font-weight:700;color:#fbbf24;letter-spacing:-0.02em;line-height:1">$${currentPrice.toFixed(2)}</p>
+          <p style="margin:4px 0 0 0;font-size:12px;color:#fbbf24;opacity:0.85">was $${normalPrice.toFixed(2)} — save $${savings} (${pctOff}% off)</p>
+        </td>
+        <td style="vertical-align:middle;text-align:right">
+          <a href="${esc(productUrl)}" style="background:#fbbf24;color:#080520;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:700;text-decoration:none;display:inline-block">View on ${esc(storeName)}</a>
+        </td>
+      </tr></table>
+    </div>
+    <p style="margin:0 0 16px 0;font-size:13px;color:#9ca3af;line-height:1.5">${cycleBlurb}</p>
+  </div>
+  <hr style="border:0;border-top:1px solid rgba(255,255,255,0.08);margin:0">
+  <div style="padding:16px 24px">
+    <p style="margin:0;font-size:11px;color:#9ca3af;line-height:1.5">You're getting this because you signed up for PriceMate sale alerts. <a href="${esc(unsubscribeUrl)}" style="color:#a78bfa;text-decoration:underline">Unsubscribe with one click</a>.</p>
+  </div>
+</div></body></html>`
+}
+
+function renderAlertText({ productName, store, currentPrice, normalPrice, cycleDays, productUrl, unsubscribeUrl }) {
+  const savings = (normalPrice - currentPrice).toFixed(2)
+  const pctOff = Math.round(((normalPrice - currentPrice) / normalPrice) * 100)
+  const storeName = STORE_NAME[store] || store
+  return [
+    `${productName}`,
+    `On sale at ${storeName}`,
+    ``,
+    `$${currentPrice.toFixed(2)} (was $${normalPrice.toFixed(2)}, save $${savings}, ${pctOff}% off)`,
+    `View: ${productUrl}`,
+    ``,
+    cycleDays
+      ? `Half-price roughly every ${cycleDays} days for the last 6 months — historically the cheapest it gets.`
+      : `Today's price is below 85% of the typical price for this product.`,
+    ``,
+    `--`,
+    `Unsubscribe: ${unsubscribeUrl}`,
+  ].join('\n')
 }
 
 async function findActiveSubscriptions() {
@@ -138,8 +205,8 @@ async function sendOne(sub, product) {
     return { dry: true }
   }
 
-  const html = await render(AlertEmail(props))
-  const text = await render(AlertEmail(props), { plainText: true })
+  const html = renderAlertHtml(props)
+  const text = renderAlertText(props)
 
   const result = await resend.emails.send({
     from: FROM_ADDRESS,
