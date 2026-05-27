@@ -218,6 +218,34 @@ describe('matchLayer2 (fuzzy Levenshtein ≤ 3)', () => {
     expect(groups[0].woolworths).toBe('W20')
   })
 
+  // Regression for 2026-05-28 Layer 2 brand-omission audit. Same product
+  // family (core+size identical), different brand → must NOT merge.
+  test('rejects when brands differ and neither is a store-brand pair', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-COLES2', name: 'Lactose Free Full Cream Milk', brand: 'Coles', size: '2L',
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      product_id: 'W-ZYMIL2', name: 'Pauls Zymil Lactose Free Full Cream Milk', brand: 'Pauls Zymil', size: '2L',
+    }))
+    expect(matchLayer2(products, new Set())).toHaveLength(0)
+  })
+
+  test('allows Coles store-brand ↔ Woolies store-brand when core matches', () => {
+    const products = emptyProducts()
+    products.coles.push(makeProduct('coles', {
+      product_id: 'C-CS', name: 'Lactose Free Full Cream Milk', brand: 'Coles', size: '2L',
+    }))
+    products.woolworths.push(makeProduct('woolworths', {
+      // 1 edit-distance from Coles core
+      product_id: 'W-WS', name: 'Lactose Free Full Cream Milks', brand: 'Woolworths', size: '2L',
+    }))
+    const groups = matchLayer2(products, new Set())
+    expect(groups).toHaveLength(1)
+    expect(groups[0].coles).toBe('C-CS')
+    expect(groups[0].woolworths).toBe('W-WS')
+  })
+
   test('rejects when core too short (length <= 5)', () => {
     const products = emptyProducts()
     // After brand+size removal "milk" is only 4 chars → core too short

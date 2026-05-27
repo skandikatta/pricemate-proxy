@@ -167,9 +167,17 @@ function bucketBySize(list) {
 }
 
 function matchLayer2(products, existingMatched) {
-  // Fuzzy: Levenshtein < 3 on core name + same size
+  // Fuzzy: Levenshtein < 3 on core name + same size + brand check.
+  //
+  // 2026-05-28: same audit-class fix as Layer 1. Layer 2 had no brand guard,
+  // so e.g. "Lactose Free Full Cream Milk" 2L at Coles (brand=Coles) was
+  // matching "Pauls Zymil Lactose Free Full Cream Milk" 2L at Woolies
+  // (brand=Pauls Zymil) because their extracted cores were Levenshtein 0 apart.
+  // Now uses the same Layer 3 brand veto: reject cross-brand unless both are
+  // store-brands of the same generic product.
   const matched = new Set(existingMatched)
   const groups = []
+  const storeBrands = new Set(['coles', 'woolworths', 'woolworths free from', 'woolworths essentials', 'woolworths macro', 'coles simply', 'coles finest', "coles nature's kitchen"])
   const wwBySize = bucketBySize(products.woolworths)
 
   for (const cp of products.coles) {
@@ -180,6 +188,14 @@ function matchLayer2(products, existingMatched) {
 
     for (const wp of candidates) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
+      // Brand veto (mirrors Layer 3): reject differing brands unless both sides
+      // are store brands of the same generic product.
+      const cb = (cp.brand || '').toLowerCase().trim()
+      const wb = (wp.brand || '').toLowerCase().trim()
+      if (cb && wb && cb !== wb) {
+        const bothStoreBrand = storeBrands.has(cb) && storeBrands.has(wb)
+        if (!bothStoreBrand) continue
+      }
       if (levenshtein(cp.core, wp.core) <= 3 && cp.core.length > 5) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
