@@ -58,38 +58,39 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-// Inline AlertEmail template (mirror of pricemate/emails/AlertEmail.tsx).
-// Inline styles + table layouts so Outlook 2007 renders correctly.
-function renderAlertHtml({ productName, store, currentPrice, normalPrice, cycleDays, productUrl, unsubscribeUrl }) {
-  const savings = (normalPrice - currentPrice).toFixed(2)
-  const pctOff = Math.round(((normalPrice - currentPrice) / normalPrice) * 100)
-  const storeName = STORE_NAME[store] || store
-  const cycleBlurb = cycleDays
-    ? `This product has been half-price roughly every <strong style="color:#f1f0ff">${cycleDays} days</strong> for the last 6 months. Today's price matches the bottom of that cycle — historically the cheapest it gets.`
-    : `Today's price is below 85% of the typical price for this product, based on 6 months of history.`
+// Inline digest email template — N products in one email, not N emails.
+// Each item has its own gold price strip; intro line varies by count.
+function renderDigestHtml({ items, scope, unsubscribeUrl }) {
+  const intro = digestIntro(items.length, scope)
+  const itemsHtml = items.map(it => {
+    const savings = (it.normalPrice - it.currentPrice).toFixed(2)
+    const pctOff = Math.round(((it.normalPrice - it.currentPrice) / it.normalPrice) * 100)
+    const storeName = STORE_NAME[it.store] || it.store
+    return `<div style="padding:14px 16px;border-radius:12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);margin-bottom:10px">
+  <table style="width:100%" role="presentation"><tr>
+    <td style="vertical-align:middle">
+      <p style="margin:0 0 4px 0;font-size:14px;font-weight:600;color:#f1f0ff;line-height:1.3">${esc(it.productName)}</p>
+      <p style="margin:0 0 6px 0;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.04em">${esc(storeName)}</p>
+      <p style="margin:0;font-size:20px;font-weight:700;color:#fbbf24;letter-spacing:-0.02em;line-height:1"><span style="font-size:22px">$${it.currentPrice.toFixed(2)}</span> <span style="font-size:12px;color:#fbbf24;opacity:0.7;font-weight:500;text-decoration:line-through">$${it.normalPrice.toFixed(2)}</span></p>
+      <p style="margin:4px 0 0 0;font-size:11px;color:#fbbf24;opacity:0.85">save $${savings} (${pctOff}% off)</p>
+    </td>
+    <td style="vertical-align:middle;text-align:right;padding-left:12px">
+      <a href="${esc(it.productUrl)}" style="background:#fbbf24;color:#080520;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;display:inline-block">View</a>
+    </td>
+  </tr></table>
+</div>`
+  }).join('')
   return `<!doctype html><html><head><meta charset="utf-8"></head><body style="background:#080520;font-family:Manrope,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px 12px;color:#f1f0ff">
-<div style="max-width:520px;margin:0 auto;background:#0f0a2a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);overflow:hidden">
+<div style="max-width:560px;margin:0 auto;background:#0f0a2a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);overflow:hidden">
   <div style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,0.08)">
     <table style="width:100%" role="presentation"><tr>
       <td style="vertical-align:middle;font-size:14px;font-weight:700;letter-spacing:-0.01em"><span style="color:#a78bfa">M</span> PriceMate</td>
-      <td style="vertical-align:middle;text-align:right;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">Sale alert</td>
+      <td style="vertical-align:middle;text-align:right;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.05em">Sale alerts</td>
     </tr></table>
   </div>
   <div style="padding:24px">
-    <h1 style="margin:0 0 8px 0;font-size:22px;font-weight:700;letter-spacing:-0.02em;line-height:1.2;color:#f1f0ff">${esc(productName)}</h1>
-    <p style="margin:0 0 20px 0;font-size:13px;color:#9ca3af">On sale right now at <strong style="color:#f1f0ff">${esc(storeName)}</strong></p>
-    <div style="padding:16px;border-radius:12px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);margin-bottom:20px">
-      <table style="width:100%" role="presentation"><tr>
-        <td style="vertical-align:middle">
-          <p style="margin:0;font-size:28px;font-weight:700;color:#fbbf24;letter-spacing:-0.02em;line-height:1">$${currentPrice.toFixed(2)}</p>
-          <p style="margin:4px 0 0 0;font-size:12px;color:#fbbf24;opacity:0.85">was $${normalPrice.toFixed(2)} — save $${savings} (${pctOff}% off)</p>
-        </td>
-        <td style="vertical-align:middle;text-align:right">
-          <a href="${esc(productUrl)}" style="background:#fbbf24;color:#080520;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:700;text-decoration:none;display:inline-block">View on ${esc(storeName)}</a>
-        </td>
-      </tr></table>
-    </div>
-    <p style="margin:0 0 16px 0;font-size:13px;color:#9ca3af;line-height:1.5">${cycleBlurb}</p>
+    <h1 style="margin:0 0 20px 0;font-size:22px;font-weight:700;letter-spacing:-0.02em;line-height:1.25;color:#f1f0ff">${esc(intro)}</h1>
+    ${itemsHtml}
   </div>
   <hr style="border:0;border-top:1px solid rgba(255,255,255,0.08);margin:0">
   <div style="padding:16px 24px">
@@ -98,24 +99,45 @@ function renderAlertHtml({ productName, store, currentPrice, normalPrice, cycleD
 </div></body></html>`
 }
 
-function renderAlertText({ productName, store, currentPrice, normalPrice, cycleDays, productUrl, unsubscribeUrl }) {
-  const savings = (normalPrice - currentPrice).toFixed(2)
-  const pctOff = Math.round(((normalPrice - currentPrice) / normalPrice) * 100)
-  const storeName = STORE_NAME[store] || store
-  return [
-    `${productName}`,
-    `On sale at ${storeName}`,
-    ``,
-    `$${currentPrice.toFixed(2)} (was $${normalPrice.toFixed(2)}, save $${savings}, ${pctOff}% off)`,
-    `View: ${productUrl}`,
-    ``,
-    cycleDays
-      ? `Half-price roughly every ${cycleDays} days for the last 6 months — historically the cheapest it gets.`
-      : `Today's price is below 85% of the typical price for this product.`,
-    ``,
-    `--`,
-    `Unsubscribe: ${unsubscribeUrl}`,
-  ].join('\n')
+function renderDigestText({ items, scope, unsubscribeUrl }) {
+  const intro = digestIntro(items.length, scope)
+  const lines = [intro, '']
+  for (const it of items) {
+    const savings = (it.normalPrice - it.currentPrice).toFixed(2)
+    const pctOff = Math.round(((it.normalPrice - it.currentPrice) / it.normalPrice) * 100)
+    const storeName = STORE_NAME[it.store] || it.store
+    lines.push(`• ${it.productName} (${storeName})`)
+    lines.push(`  $${it.currentPrice.toFixed(2)} (was $${it.normalPrice.toFixed(2)}, save $${savings}, ${pctOff}% off)`)
+    lines.push(`  ${it.productUrl}`)
+    lines.push('')
+  }
+  lines.push('--')
+  lines.push(`Unsubscribe: ${unsubscribeUrl}`)
+  return lines.join('\n')
+}
+
+function digestIntro(n, scope) {
+  if (scope === 'watchlist') {
+    return n === 1
+      ? `1 product from your watchlist is on sale today`
+      : `${n} products from your watchlist are on sale today`
+  }
+  if (scope === 'category') {
+    return n === 1 ? `1 deal in your category today` : `${n} deals in your category today`
+  }
+  return n === 1 ? `Today's top deal` : `Today's top ${n} deals`
+}
+
+function digestSubject(items, scope) {
+  if (items.length === 1) {
+    const it = items[0]
+    const pctOff = Math.round(((it.normalPrice - it.currentPrice) / it.normalPrice) * 100)
+    return `${it.productName} is ${pctOff}% off at ${STORE_NAME[it.store] || it.store}`
+  }
+  const topSave = Math.max(...items.map(i => Math.round(((i.normalPrice - i.currentPrice) / i.normalPrice) * 100)))
+  if (scope === 'watchlist') return `${items.length} from your watchlist on sale — up to ${topSave}% off`
+  if (scope === 'category') return `${items.length} deals in your category — up to ${topSave}% off`
+  return `${items.length} sale alerts — up to ${topSave}% off`
 }
 
 async function findActiveSubscriptions() {
@@ -221,32 +243,29 @@ async function watchlistFor(email) {
   return null
 }
 
-async function sendOne(sub, product) {
-  const currentPrice = parseFloat(product.current_price)
-  const normalPrice = parseFloat(product.normal_price)
-  const productUrl = storeUrl[product.store]?.(product.product_id) || APP_BASE_URL
+async function sendDigest(sub, products) {
+  // One digest email per subscription per cron run. All matched products go
+  // in this email; dedup is recorded per (sub, product) so a product alerted
+  // today won't re-appear in tomorrow's digest within DEDUP_DAYS.
   const unsubscribeUrl = `${APP_BASE_URL}/alerts/unsubscribe?token=${encodeURIComponent(sub.token)}`
+  const items = products.map(p => ({
+    productName: [p.name, p.size].filter(Boolean).join(' '),
+    store: p.store,
+    currentPrice: parseFloat(p.current_price),
+    normalPrice: parseFloat(p.normal_price),
+    productUrl: storeUrl[p.store]?.(p.product_id) || APP_BASE_URL,
+  }))
 
-  const fullName = [product.name, product.size].filter(Boolean).join(' ')
-  const props = {
-    productName: fullName,
-    store: product.store,
-    currentPrice,
-    normalPrice,
-    cycleDays: null,  // TODO: pull from a pre-computed predictions table once C in FIXES.md ships
-    productUrl,
-    unsubscribeUrl,
-  }
-
-  const subject = `${fullName} is on sale at ${product.store[0].toUpperCase()}${product.store.slice(1)}`
+  const subject = digestSubject(items, sub.scope)
 
   if (!resend) {
-    console.log(`[DRY] would send "${subject}" to ${sub.email} (was $${normalPrice} → $${currentPrice})`)
-    return { dry: true }
+    console.log(`[DRY] would send digest "${subject}" to ${sub.email} with ${items.length} items`)
+    items.forEach((it, i) => console.log(`       ${i+1}. ${it.productName} — $${it.currentPrice} (was $${it.normalPrice})`))
+    return { dry: true, count: items.length }
   }
 
-  const html = renderAlertHtml(props)
-  const text = renderAlertText(props)
+  const html = renderDigestHtml({ items, scope: sub.scope, unsubscribeUrl })
+  const text = renderDigestText({ items, scope: sub.scope, unsubscribeUrl })
 
   const result = await resend.emails.send({
     from: FROM_ADDRESS,
@@ -261,12 +280,21 @@ async function sendOne(sub, product) {
     },
   })
 
+  // Record one email_sends row per product so dedup works at product
+  // granularity. All N rows share the same provider_id (the digest's
+  // Resend message id) — that linkage is useful for tracing bounces back
+  // to which alert batch they belonged to.
+  const providerId = result.data?.id || null
+  const params = products.flatMap(p => [sub.id, 'alert', p.store, p.product_id, providerId])
+  const valueSql = products.map((_, i) => {
+    const b = i * 5
+    return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5})`
+  }).join(',')
   await pool.query(
-    `INSERT INTO email_sends (subscription_id, kind, store, product_id, provider_id)
-     VALUES ($1, 'alert', $2, $3, $4)`,
-    [sub.id, product.store, product.product_id, result.data?.id || null]
+    `INSERT INTO email_sends (subscription_id, kind, store, product_id, provider_id) VALUES ${valueSql}`,
+    params
   )
-  return { sent: true, id: result.data?.id }
+  return { sent: true, id: providerId, count: items.length }
 }
 
 async function main() {
@@ -275,7 +303,12 @@ async function main() {
   const onSale = await findProductsOnSale()
   console.log(`[send-alerts] ${subs.length} active 'instant' subs · ${onSale.length} products on sale today`)
 
-  let sentCount = 0, skipCount = 0, dryCount = 0, errCount = 0
+  // Per-scope caps for how many products go in the digest. Watchlist users
+  // explicitly chose those products — show them all (up to 20 for safety).
+  // All-specials/category users get a curated top-N.
+  const MAX_PER_DIGEST = { watchlist: 20, 'all-specials': 5, category: 8 }
+
+  let emailsSent = 0, productsAlerted = 0, skipCount = 0, dryCount = 0, errCount = 0, subsWithNothing = 0
 
   for (const sub of subs) {
     // Determine candidate products for this sub
@@ -288,23 +321,31 @@ async function main() {
       const wlSet = new Set(wl.map(w => `${w.store}|${w.product_id}`))
       candidates = onSale.filter(p => wlSet.has(`${p.store}|${p.product_id}`))
     } else if (sub.scope === 'category') {
-      // scope_payload = category slug. category is on `products.category`.
       candidates = onSale.filter(p => p.category === sub.scope_payload)
     }
 
-    // Cap at 5 products per email per user — don't spam with 30 specials.
-    candidates = candidates.slice(0, 5)
-
+    // Filter out already-alerted (dedup) before capping
+    const fresh = []
     for (const p of candidates) {
       if (await alreadyAlerted(sub.id, p.store, p.product_id)) { skipCount++; continue }
-      try {
-        const r = await sendOne(sub, p)
-        if (r.dry) dryCount++
-        else sentCount++
-      } catch (e) {
-        console.error(`[send-alerts] failed to send to ${sub.email} for ${p.store}/${p.product_id}: ${e.message}`)
-        errCount++
-      }
+      fresh.push(p)
+    }
+
+    const cap = MAX_PER_DIGEST[sub.scope] || 5
+    const digestItems = fresh.slice(0, cap)
+
+    if (digestItems.length === 0) {
+      subsWithNothing++
+      continue
+    }
+
+    try {
+      const r = await sendDigest(sub, digestItems)
+      if (r.dry) dryCount++
+      else { emailsSent++; productsAlerted += r.count }
+    } catch (e) {
+      console.error(`[send-alerts] failed to send digest to ${sub.email}: ${e.message}`)
+      errCount++
     }
   }
 
@@ -312,8 +353,10 @@ async function main() {
     date: new Date().toISOString().slice(0, 10),
     subs_active: subs.length,
     products_on_sale: onSale.length,
-    sent: sentCount,
+    emails_sent: emailsSent,
+    products_alerted: productsAlerted,
     dry_run: dryCount,
+    subs_no_new_products: subsWithNothing,
     skipped_dedup: skipCount,
     errors: errCount,
     duration_s: Math.round((Date.now() - startedAt) / 1000),
