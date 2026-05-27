@@ -57,23 +57,18 @@ async function upsertProducts(products) {
   }
 }
 
-// Writes a price_history row per (store, product_id, day) — every product, every run,
-// even when the price hasn't changed. Day-granularity uniqueness comes from the
-// price_history_daily_uniq index added in migrations/003. Same-day re-runs are
-// idempotent (the duplicate just UPDATEs the existing row's price).
-//
-// Returns the number of products whose price actually CHANGED vs the most recent
-// prior row. Scrapers log this as "X price changes" for human readability —
-// the underlying row density is now uniform regardless of whether anything moved.
 async function insertPriceChanges(prices) {
   if (!prices.length) return 0
 
+  // Filter out junk: missing price, zero, negative, NaN. Storing $0 corrupts cycle detection.
+  // Silent skip: per-page logs interleave with scraper progress output.
   prices = prices.filter(p => {
     const n = parseFloat(p.price)
     return Number.isFinite(n) && n > 0
   })
   if (!prices.length) return 0
 
+  // Deduplicate by product_id (same product can appear in multiple categories)
   const seen = new Map()
   for (const p of prices) seen.set(p.product_id, p)
   prices = [...seen.values()]
@@ -86,14 +81,17 @@ async function insertPriceChanges(prices) {
   )
   const lastPrices = Object.fromEntries(rows.map(r => [r.product_id, parseFloat(r.price)]))
 
-  const changedCount = prices.reduce((acc, p) => {
+  const changed = prices.filter(p => {
     const last = lastPrices[p.product_id]
-    return acc + (last === undefined || last !== parseFloat(p.price) ? 1 : 0)
-  }, 0)
+    return last === undefined || last !== parseFloat(p.price)
+  })
 
+  if (!changed.length) return 0
+
+  // 5 cols × 13000 rows = 65000, safely under the 65535 placeholder cap.
   const MAX_PRICE_BATCH = 13000
-  for (let i = 0; i < prices.length; i += MAX_PRICE_BATCH) {
-    const batch = prices.slice(i, i + MAX_PRICE_BATCH)
+  for (let i = 0; i < changed.length; i += MAX_PRICE_BATCH) {
+    const batch = changed.slice(i, i + MAX_PRICE_BATCH)
     const values = batch.map((_, j) => {
       const base = j * 5
       return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5})`
@@ -101,15 +99,11 @@ async function insertPriceChanges(prices) {
     const params = batch.flatMap(p => [p.store, p.product_id, p.price, p.was_price || null, p.is_on_special || false])
     await pool.query(
       `INSERT INTO price_history (store,product_id,price,was_price,is_on_special) VALUES ${values}
-       ON CONFLICT (store, product_id, (scraped_at::date))
-       DO UPDATE SET
-         price = EXCLUDED.price,
-         was_price = EXCLUDED.was_price,
-         is_on_special = EXCLUDED.is_on_special`,
+       ON CONFLICT (store,product_id,scraped_at) DO NOTHING`,
       params
     )
   }
-  return changedCount
+  return changed.length
 }
 
 async function getStoreProductCount(store) {
