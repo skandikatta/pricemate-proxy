@@ -1,41 +1,43 @@
 #!/usr/bin/env node
-// ingest-hagglers-history.js
+// ingest-hagglers-history.js — multi-strategy matcher
 //
 // One-shot ingest of competitor (Hagglers) daily price history into our
-// price_history_v2, attached to the correct internal_id via our existing
-// product_aliases.
+// price_history_v2, attached to the correct internal_id via product_aliases.
 //
-// Hagglers's daily series (median 32 days / max 67 days per product) gives
-// our cycle-detector enough density to predict on products that currently
-// have <7 sparse change-event rows.
+// MATCHING STRATEGIES (run in priority order — first hit wins; subsequent
+// strategies skip products already matched).
 //
-// SAFETY: matches use the SAME audit-class guards as match-products.js:
-//   - re-extract brand+size from Hagglers `name` (their `brand` field is
-//     94% garbage — usually just the first words of the name)
-//   - require sizeNorm match (no size-blind merging)
-//   - require token-sort ratio ≥ 0.85 on core (high confidence threshold)
-//   - brand veto: when both sides parse a brand AND they differ AND neither
-//     side is a store-brand, REJECT (prevents Pauls Zymil ↔ Coles brand
-//     class of false-merges)
-//   - INSERT ON CONFLICT DO NOTHING — never overwrites existing v2 rows
+//   S1 — exact normalized name. Hagglers's "INNER GOODNESS Regular Soy Milk 1L"
+//        against our synthesized "INNER GOODNESS Regular Soy Milk 1L"
+//        (brand + name normalized). Catches the "Hagglers keeps brand inline,
+//        we keep brand in a separate column" pattern cleanly.
 //
-// Run (dry-run, default — writes audit JSON, no DB writes):
-//   DB_HOST=localhost DB_PASSWORD=... node ingest-hagglers-history.js hagglers-data.json
+//   S2 — token-sort ≥ 0.85 inside (store, sizeNorm) bucket. Strict brand veto.
 //
-// Run (commit to DB after audit looks clean):
-//   DB_HOST=localhost DB_PASSWORD=... node ingest-hagglers-history.js hagglers-data.json --apply
+//   S3 — token-sort ≥ 0.78 inside (store, sizeNorm) bucket. STRICT brand check
+//        (our brand token MUST appear in Hagglers's name).
 //
-// Idempotent: re-running just re-inserts; unique index drops duplicates.
+//   S4 — partial-name containment. Hagglers's core appears as substring in
+//        our core (or vice versa) + sizeNorm match + strict brand check.
+//
+//   S5 — token-sort ≥ 0.65 + sizeNorm match + STRICT brand check + extra
+//        guard: both sides' first significant token must agree.
+//
+//   S6 — sizeless Coles disambiguation. For Hagglers Coles items lacking a
+//        sizeNorm: find candidates by (store, core) text-overlap, then pick
+//        if EXACTLY ONE candidate's latest price equals Hagglers's latest
+//        price (±5c). Conservative — only one-of-one wins.
+//
+// ZERO false-merge goal: every threshold drop is paired with a tighter brand
+// check. Audit JSON shows per-strategy counts so we can spot pollution.
 
 const fs = require('fs')
 const path = require('path')
 const { Pool } = require('pg')
 const {
-  normalize, extractCoreName, extractSize,
-  tokenSortRatio,
+  normalize, extractCoreName, extractSize, tokenSortRatio,
 } = require('./match-products')
 
-const TOKEN_THRESHOLD = 0.85
 const STORE_BRANDS = new Set([
   'coles', 'woolworths', 'aldi',
   'woolworths free from', 'woolworths essentials', 'woolworths macro',
@@ -44,7 +46,8 @@ const STORE_BRANDS = new Set([
 
 const args = process.argv.slice(2)
 const APPLY = args.includes('--apply')
-const dataFile = args.find(a => !a.startsWith('--')) || 'hagglers-data.json'
+const STORE_FILTER = args.includes('--store') ? args[args.indexOf('--store') + 1] : null
+const dataFile = args.find(a => /\.json$/.test(a)) || 'hagglers-data.json'
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -55,225 +58,332 @@ const pool = new Pool({
   max: 5,
 })
 
-// ─── Brand re-extraction (Hagglers's brand field is unreliable) ─────────────
-// Strategy: split the name into tokens; if the first 1-3 tokens look like a
-// brand prefix (Title-Case, not a common product word), treat that as the
-// brand. Conservative — returns null if uncertain rather than guessing.
-const PRODUCT_WORDS = new Set([
+// Tokens that can't be the start of a brand. Used by reExtractBrand and the
+// strictBrandCheck.
+const STOPWORDS = new Set([
   'organic', 'natural', 'fresh', 'free', 'range', 'fat', 'cream', 'low',
   'lite', 'light', 'whole', 'sliced', 'diced', 'mini', 'large', 'small',
   'medium', 'extra', 'premium', 'sweet', 'salted', 'unsalted', 'instant',
-  'frozen', 'chilled', 'cold', 'hot', 'long', 'life', 'fresh', 'liquid',
-  'creamy', 'thick', 'thin', 'plain', 'crunchy', 'smooth', 'classic',
-  'original', 'real', 'pure', 'tasty', 'best', 'simply',
+  'frozen', 'chilled', 'cold', 'hot', 'long', 'life', 'liquid', 'creamy',
+  'thick', 'thin', 'plain', 'crunchy', 'smooth', 'classic', 'original',
+  'real', 'pure', 'tasty', 'best', 'simply', 'with', 'and', 'the',
 ])
+
+// ─── Hagglers brand re-extraction ────────────────────────────────────────────
 function reExtractBrand(name) {
   if (!name) return null
   const tokens = name.trim().split(/\s+/)
   if (tokens.length < 2) return null
-  // Try first 2 tokens, then first 1 token, as candidate brand prefixes
   for (const n of [2, 1]) {
     if (tokens.length <= n) continue
-    const prefix = tokens.slice(0, n).join(' ')
     const tokensLower = tokens.slice(0, n).map(t => t.toLowerCase())
-    const looksBrand =
+    const ok =
       tokensLower.every(t => /^[a-z][a-z0-9'&-]*$/i.test(t)) &&
-      tokensLower.every(t => !PRODUCT_WORDS.has(t)) &&
+      tokensLower.every(t => !STOPWORDS.has(t)) &&
       tokens.slice(0, n).every(t => /^[A-Z]/.test(t))
-    if (looksBrand) return prefix
+    if (ok) return tokens.slice(0, n).join(' ')
   }
   return null
 }
 
-// Date label → ISO string. Assumes current year (data is recent).
+// ─── Strict brand check ─────────────────────────────────────────────────────
+// Required by S3, S4, S5. Either:
+//   (a) Our brand's significant first-token appears in Hagglers's normalized name, OR
+//   (b) Hagglers's re-extracted brand appears in our normalized name + brand-norm
+// At least one direction must hold. Brands that look like generic product words
+// don't qualify (returns true to allow fall-through — the next layer's check
+// will be stricter).
+function strictBrandCheck(item, candidate, reBrandNorm) {
+  const haggNameNorm = (item.name || '').toLowerCase()
+  const ourBrandNorm = candidate.brandNorm || ''
+  const ourNameNorm = (candidate.name || '').toLowerCase()
+
+  if (!ourBrandNorm && !reBrandNorm) return true  // neither side has a brand → skip check
+
+  // Direction A: our brand token in Hagglers's name
+  if (ourBrandNorm) {
+    const firstToken = ourBrandNorm.split(/\s+/).find(t => !STOPWORDS.has(t) && t.length >= 3)
+    if (firstToken && haggNameNorm.includes(firstToken)) return true
+    // Store-brand carve-out — our brand IS the store, allow if no other named brand in Hagglers
+    if (STORE_BRANDS.has(ourBrandNorm)) {
+      // No competing brand prefix detected in Hagglers's name → accept
+      const haggFirstToken = haggNameNorm.split(/\s+/).find(t => !STOPWORDS.has(t) && t.length >= 3)
+      if (!haggFirstToken || !/^[a-z]/.test(haggFirstToken)) return true
+      // If Hagglers's first significant token doesn't look like a brand name, accept
+      // (the reExtractBrand returning null means Hagglers didn't see a brand either)
+      if (!reBrandNorm) return true
+    }
+  }
+
+  // Direction B: Hagglers's re-extracted brand in our name+brand
+  if (reBrandNorm) {
+    const haggFirstToken = reBrandNorm.split(/\s+/).find(t => !STOPWORDS.has(t) && t.length >= 3)
+    if (haggFirstToken && (ourNameNorm.includes(haggFirstToken) || ourBrandNorm.includes(haggFirstToken))) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// ─── Date label → ISO ───────────────────────────────────────────────────────
 function parseDateLabel(label, refYear = 2026) {
   const m = label.match(/^([A-Za-z]{3})\s+(\d{1,2})$/)
   if (!m) return null
   const months = { Jan:1, Feb:2, Mar:3, Apr:4, May:5, Jun:6, Jul:7, Aug:8, Sep:9, Oct:10, Nov:11, Dec:12 }
-  const mo = months[m[1]]
-  const d = parseInt(m[2], 10)
+  const mo = months[m[1]]; const d = parseInt(m[2], 10)
   if (!mo || !d) return null
   return `${refYear}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
-// ─── Load our catalog into in-memory matching structures ────────────────────
+// ─── Load catalog into rich lookup structures ───────────────────────────────
 async function loadOurCatalog() {
   const { rows } = await pool.query(
     `SELECT p.store, p.product_id, p.name, p.brand, p.size,
-            pa.internal_id
+            pa.internal_id,
+            (SELECT price FROM price_history ph
+              WHERE ph.store = p.store AND ph.product_id = p.product_id
+              ORDER BY ph.scraped_at DESC LIMIT 1) AS latest_price
        FROM products p
        JOIN product_aliases pa
          ON pa.store = p.store AND pa.vendor_id = p.product_id
       WHERE p.name IS NOT NULL AND LENGTH(p.name) > 0`
   )
-  // Bucket by (store, sizeNorm) for O(1) candidate lookup
-  const buckets = new Map() // key: store|sizeNorm → [{ ...row, core, brandNorm }]
+
+  const sizedBuckets = new Map()      // (store|sizeNorm) → [candidates]
+  const sizelessBuckets = new Map()   // (store) → [candidates with no sizeNorm]
+  const exactFullNameIndex = new Map() // (store|normalize(brand+name+size)) → candidate
+  const normNameIndex = new Map()     // (store|normalize(name)) → [candidates]
+
   for (const r of rows) {
     const core = extractCoreName(r.name, r.brand)
     const sizeNorm = extractSize(r.name, r.size)
-    if (!sizeNorm) continue  // skip sizeless catalog rows — we won't match them
-    const key = `${r.store}|${sizeNorm}`
-    if (!buckets.has(key)) buckets.set(key, [])
-    buckets.get(key).push({
-      store: r.store,
-      product_id: r.product_id,
-      internal_id: r.internal_id,
-      name: r.name,
-      brand: r.brand,
-      brandNorm: (r.brand || '').toLowerCase().trim(),
-      core,
-      sizeNorm,
-    })
+    const brandNorm = (r.brand || '').toLowerCase().trim()
+    const synthFull = normalize([r.brand, r.name, r.size].filter(Boolean).join(' '))
+    const nameNorm = normalize(r.name)
+
+    const c = {
+      store: r.store, product_id: r.product_id, internal_id: r.internal_id,
+      name: r.name, brand: r.brand, brandNorm, core, sizeNorm,
+      synthFull, nameNorm, latest_price: r.latest_price ? parseFloat(r.latest_price) : null,
+    }
+
+    if (sizeNorm) {
+      const k = `${r.store}|${sizeNorm}`
+      if (!sizedBuckets.has(k)) sizedBuckets.set(k, [])
+      sizedBuckets.get(k).push(c)
+    } else {
+      const k = r.store
+      if (!sizelessBuckets.has(k)) sizelessBuckets.set(k, [])
+      sizelessBuckets.get(k).push(c)
+    }
+
+    if (synthFull) {
+      const k = `${r.store}|${synthFull}`
+      if (!exactFullNameIndex.has(k)) exactFullNameIndex.set(k, c)
+    }
+    const nk = `${r.store}|${nameNorm}`
+    if (!normNameIndex.has(nk)) normNameIndex.set(nk, [])
+    normNameIndex.get(nk).push(c)
   }
-  return buckets
+  return { sizedBuckets, sizelessBuckets, exactFullNameIndex, normNameIndex }
 }
 
-// ─── Match one Hagglers item to our catalog ─────────────────────────────────
-function matchOne(item, buckets) {
+// ─── 5-strategy matcher ─────────────────────────────────────────────────────
+function matchOne(item, cat, claimed) {
   const store = item.store
   const reBrand = reExtractBrand(item.name)
   const reBrandNorm = reBrand ? reBrand.toLowerCase().trim() : ''
   const sizeNorm = extractSize(item.name, item.size)
   const core = extractCoreName(item.name, reBrand)
-  if (!sizeNorm || !core || core.length < 5) {
-    return { match: null, reason: 'no sizeNorm or core too short' }
-  }
-  const candidates = buckets.get(`${store}|${sizeNorm}`) || []
-  if (!candidates.length) return { match: null, reason: 'no same-store same-size candidates' }
+  const haggNameNorm = normalize(item.name)
+  const haggLatestPrice = item.prices?.[item.prices.length - 1] ?? null
 
-  let best = null, bestScore = 0
-  for (const c of candidates) {
-    // Brand veto: if both sides have a brand AND they differ AND not both
-    // store-brands, reject. Mirrors Layer 3's logic.
-    if (reBrandNorm && c.brandNorm && reBrandNorm !== c.brandNorm) {
-      const bothStoreBrand = STORE_BRANDS.has(reBrandNorm) && STORE_BRANDS.has(c.brandNorm)
-      if (!bothStoreBrand) continue
+  const isClaimed = (c) => claimed.has(`${c.store}_${c.product_id}`)
+
+  // ── S1: exact normalized full-name match ──────────────────────────────────
+  const synthKey = `${store}|${haggNameNorm}`
+  const directMatch = cat.exactFullNameIndex.get(synthKey)
+  if (directMatch && !isClaimed(directMatch)) {
+    return { match: directMatch, strategy: 'S1-exact', score: 1.00, sizeNorm, core, reBrand }
+  }
+
+  // ── S2-S5: sized matching with progressive thresholds ─────────────────────
+  if (sizeNorm && core && core.length >= 5) {
+    const candidates = (cat.sizedBuckets.get(`${store}|${sizeNorm}`) || []).filter(c => !isClaimed(c))
+
+    // S2: token-sort >= 0.85 with brand veto (existing behaviour)
+    {
+      let best = null, bestScore = 0
+      for (const c of candidates) {
+        if (reBrandNorm && c.brandNorm && reBrandNorm !== c.brandNorm) {
+          const both = STORE_BRANDS.has(reBrandNorm) && STORE_BRANDS.has(c.brandNorm)
+          if (!both) continue
+        }
+        const s = tokenSortRatio(core, c.core)
+        if (s > bestScore) { best = c; bestScore = s }
+      }
+      if (best && bestScore >= 0.85) {
+        return { match: best, strategy: 'S2-tokensort-085', score: bestScore, sizeNorm, core, reBrand }
+      }
     }
-    const score = tokenSortRatio(core, c.core)
-    if (score > bestScore) {
-      best = c
-      bestScore = score
+
+    // S3, S4, S5 (sub-0.85 token-sort + partial-containment) DISABLED 2026-05-28.
+    // Audit on full prod data found 30-50% false-merge rate at these thresholds
+    // (e.g. Vitasoy Almond ↔ Vitasoy Soy; Westgold Unsalted ↔ Westgold Salted;
+    // generic "Full Cream Milk 1L" ↔ The Little Big Dairy Company FCM).
+    //
+    // Token-sort can't tell apart products whose differentiator word is short
+    // (almond/soy/oat differ by ≤3 chars but represent fundamentally different
+    // products). Until we encode mutually-exclusive variant sets per category,
+    // S3-S5 are unsafe. Audit evidence in ingest-hagglers-audit-2026-05-27T23-40-32-458Z.json.
+  }
+
+  // ── S6: sizeless price-disambiguation for Coles ───────────────────────────
+  // Only triggers when:
+  //   - Hagglers's item has no sizeNorm
+  //   - There's EXACTLY ONE catalog candidate in same store whose nameNorm shares
+  //     the core text AND whose latest price equals Hagglers's latest price ±5c
+  if (!sizeNorm && haggLatestPrice != null && (cat.sizelessBuckets.size || cat.sizedBuckets.size)) {
+    const allCandidates = []
+    // Look across BOTH sized + sizeless catalog (the sized ones are where Coles items live)
+    for (const [k, arr] of cat.sizedBuckets) {
+      if (!k.startsWith(`${store}|`)) continue
+      for (const c of arr) if (!isClaimed(c)) allCandidates.push(c)
     }
+    for (const arr of [cat.sizelessBuckets.get(store) || []]) {
+      for (const c of arr) if (!isClaimed(c)) allCandidates.push(c)
+    }
+
+    // Narrow by core text overlap (Hagglers core must be substring of ours, or vice versa)
+    const narrowed = []
+    for (const c of allCandidates) {
+      if (core.length >= 8 && (c.nameNorm.includes(core) || c.core === core)) {
+        if (!strictBrandCheck(item, c, reBrandNorm)) continue
+        // Price disambiguation: candidate's latest_price must match Hagglers's latest
+        if (c.latest_price != null && Math.abs(c.latest_price - haggLatestPrice) <= 0.05) {
+          narrowed.push(c)
+        }
+      }
+    }
+    if (narrowed.length === 1) {
+      return {
+        match: narrowed[0], strategy: 'S6-sizeless-priceuniq', score: 0.95,
+        sizeNorm: null, core, reBrand,
+      }
+    }
+    if (narrowed.length === 0) {
+      return { match: null, reason: 'S6: no name-overlap + price-match candidate' }
+    }
+    return { match: null, reason: `S6: ${narrowed.length} ambiguous candidates (same price+name)` }
   }
-  if (!best || bestScore < TOKEN_THRESHOLD) {
-    return { match: null, reason: `best score ${bestScore.toFixed(2)} < ${TOKEN_THRESHOLD}` }
-  }
-  return {
-    match: best,
-    score: bestScore,
-    reBrand: reBrand,
-    sizeNorm,
-    core,
-  }
+
+  return { match: null, reason: 'no sizeNorm and not Coles sizeless / no strategy match' }
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`=== ingest-hagglers-history ${APPLY ? '[APPLY]' : '[DRY-RUN]'} ===`)
+  console.log(`=== ingest-hagglers-history (5-strategy) ${APPLY ? '[APPLY]' : '[DRY-RUN]'} ===`)
   console.log(`Loading ${dataFile}...`)
   const raw = fs.readFileSync(dataFile, 'utf8')
-  const hagglers = JSON.parse(raw)
-  console.log(`  ${hagglers.length} Hagglers items`)
+  let hagglers = JSON.parse(raw)
+  console.log(`  ${hagglers.length} Hagglers items in file`)
+  if (STORE_FILTER) {
+    hagglers = hagglers.filter(h => h.store === STORE_FILTER)
+    console.log(`  ${hagglers.length} after --store ${STORE_FILTER} filter`)
+  }
 
-  console.log('Loading our catalog + aliases...')
-  const buckets = await loadOurCatalog()
-  const catalogCount = [...buckets.values()].reduce((a, b) => a + b.length, 0)
-  console.log(`  ${catalogCount} of our products (bucketed by store+sizeNorm)`)
+  console.log('Loading our catalog + aliases + latest prices...')
+  const cat = await loadOurCatalog()
+  const sizedTotal = [...cat.sizedBuckets.values()].reduce((a, b) => a + b.length, 0)
+  const sizelessTotal = [...cat.sizelessBuckets.values()].reduce((a, b) => a + b.length, 0)
+  console.log(`  ${sizedTotal} sized + ${sizelessTotal} sizeless of our products indexed`)
+  console.log(`  ${cat.exactFullNameIndex.size} exact full-name keys`)
 
-  console.log('Matching...')
+  console.log('Matching (5 strategies, first-hit-wins)...')
+  const claimed = new Set()  // tracks our products already matched, prevents double-matching
   const matches = []
   const unmatched = []
+  const strategyCounts = {}
+
   for (const item of hagglers) {
-    const result = matchOne(item, buckets)
+    const result = matchOne(item, cat, claimed)
     if (result.match) {
       matches.push({ hagglers: item, ...result })
+      claimed.add(`${result.match.store}_${result.match.product_id}`)
+      strategyCounts[result.strategy] = (strategyCounts[result.strategy] || 0) + 1
     } else {
       unmatched.push({ hagglers: item, reason: result.reason })
     }
   }
+
   console.log(`  ${matches.length} matched (${(100 * matches.length / hagglers.length).toFixed(1)}%)`)
   console.log(`  ${unmatched.length} unmatched`)
+  console.log('  per-strategy:')
+  for (const [k, v] of Object.entries(strategyCounts).sort()) console.log(`    ${k}: ${v}`)
 
-  // Match-rate by store
-  const byStore = { coles: { m: 0, u: 0 }, woolworths: { m: 0, u: 0 }, aldi: { m: 0, u: 0 } }
+  const byStore = {}
   for (const m of matches) (byStore[m.hagglers.store] ||= { m:0, u:0 }).m++
   for (const u of unmatched) (byStore[u.hagglers.store] ||= { m:0, u:0 }).u++
-  console.log('  per-store match rate:')
+  console.log('  per-store:')
   for (const [s, c] of Object.entries(byStore)) {
-    const total = c.m + c.u
-    console.log(`    ${s}: ${c.m}/${total} (${(100*c.m/total).toFixed(1)}%)`)
+    console.log(`    ${s}: ${c.m}/${c.m + c.u} (${(100*c.m/(c.m+c.u)).toFixed(1)}%)`)
   }
 
-  // Distribution of token-sort scores
-  const scores = matches.map(m => m.score).sort((a, b) => a - b)
-  if (scores.length) {
-    console.log(`  score distribution: min ${scores[0].toFixed(2)} | p50 ${scores[Math.floor(scores.length*0.5)].toFixed(2)} | p90 ${scores[Math.floor(scores.length*0.9)].toFixed(2)} | max ${scores[scores.length-1].toFixed(2)}`)
-  }
-
-  // Total history rows we'd insert
+  // History row count
   let totalRows = 0
   for (const m of matches) totalRows += (m.hagglers.prices || []).length
   console.log(`  ${totalRows} candidate price_history_v2 rows to insert`)
 
-  // Write audit JSON: 200 random matches + 50 low-score matches + 50 unmatched
+  // Audit JSON
   const ts = new Date().toISOString().replace(/[:.]/g, '-')
   const auditPath = path.join(path.dirname(dataFile), `ingest-hagglers-audit-${ts}.json`)
-  const lowScoreMatches = [...matches].sort((a, b) => a.score - b.score).slice(0, 50)
-  const randomMatches = [...matches].sort(() => Math.random() - 0.5).slice(0, 200)
-  fs.writeFileSync(auditPath, JSON.stringify({
-    generated_at: new Date().toISOString(),
-    dry_run: !APPLY,
-    totals: {
-      hagglers_items: hagglers.length,
-      matched: matches.length,
-      unmatched: unmatched.length,
-      candidate_history_rows: totalRows,
-    },
-    per_store: byStore,
-    score_distribution: scores.length ? {
-      min: scores[0], p50: scores[Math.floor(scores.length*0.5)],
-      p90: scores[Math.floor(scores.length*0.9)], max: scores[scores.length-1],
-    } : null,
-    sample_matches_random_200: randomMatches.map(m => ({
-      score: m.score.toFixed(2),
+  const byStrategy = {}
+  for (const m of matches) {
+    if (!byStrategy[m.strategy]) byStrategy[m.strategy] = []
+    byStrategy[m.strategy].push(m)
+  }
+  const sampleByStrategy = {}
+  for (const [strat, arr] of Object.entries(byStrategy)) {
+    sampleByStrategy[strat] = arr.slice(0, 20).map(m => ({
+      score: m.score?.toFixed?.(2) || m.score,
       hagglers_name: m.hagglers.name,
-      hagglers_brand_raw: m.hagglers.brand,
-      hagglers_brand_extracted: m.reBrand,
       our_name: m.match.name,
       our_brand: m.match.brand,
       store: m.hagglers.store,
       sizeNorm: m.sizeNorm,
-      core: m.core,
       our_internal_id: m.match.internal_id,
       our_vendor_id: m.match.product_id,
       history_rows: m.hagglers.prices.length,
-    })),
-    lowest_score_50: lowScoreMatches.map(m => ({
-      score: m.score.toFixed(2),
-      hagglers_name: m.hagglers.name,
-      our_name: m.match.name,
-      store: m.hagglers.store,
-    })),
+    }))
+  }
+  fs.writeFileSync(auditPath, JSON.stringify({
+    generated_at: new Date().toISOString(),
+    dry_run: !APPLY,
+    totals: {
+      hagglers_items: hagglers.length, matched: matches.length, unmatched: unmatched.length,
+      candidate_history_rows: totalRows,
+    },
+    per_strategy: strategyCounts,
+    per_store: byStore,
+    samples_per_strategy_first_20: sampleByStrategy,
     unmatched_sample_50: unmatched.slice(0, 50).map(u => ({
-      hagglers_name: u.hagglers.name,
-      store: u.hagglers.store,
-      reason: u.reason,
+      hagglers_name: u.hagglers.name, store: u.hagglers.store, reason: u.reason,
     })),
   }, null, 2))
-  console.log(`\nAudit written to: ${auditPath}`)
+  console.log(`\nAudit: ${auditPath}`)
 
   if (!APPLY) {
-    console.log('\nDRY-RUN — no DB writes. Inspect audit JSON, then re-run with --apply.')
+    console.log('\nDRY-RUN — inspect audit then re-run with --apply.')
     return
   }
 
-  // ─── INSERT history rows ─────────────────────────────────────────────────
+  // INSERT
   console.log('\nInserting price_history_v2 rows...')
-  const REF_YEAR = 2026  // all Hagglers dates are within the past 2 months → 2026
+  const REF_YEAR = 2026
   const BATCH = 5000
-  let inserted = 0
-  let skipped = 0
-  const pending = []  // { internal_id, store, scraped_at(YYYY-MM-DD), price }
+  let inserted = 0, skipped = 0
+  const pending = []
   for (const m of matches) {
     const { hagglers, match } = m
     for (let i = 0; i < hagglers.dates.length; i++) {
@@ -283,7 +393,7 @@ async function main() {
       pending.push({ internal_id: match.internal_id, store: match.store, scraped_at: date, price })
     }
   }
-  console.log(`  Total rows queued: ${pending.length} (skipped ${skipped} bad)`)
+  console.log(`  ${pending.length} rows queued (skipped ${skipped} bad)`)
 
   for (let i = 0; i < pending.length; i += BATCH) {
     const batch = pending.slice(i, i + BATCH)
@@ -299,9 +409,9 @@ async function main() {
       params
     )
     inserted += res.rowCount
-    if (i % 50000 === 0) console.log(`  ${i + batch.length}/${pending.length}  inserted=${inserted}`)
+    if (i % 50000 === 0 && i > 0) console.log(`  ${i + batch.length}/${pending.length}  inserted=${inserted}`)
   }
-  console.log(`\n✓ DONE. ${inserted} rows inserted into price_history_v2 (${pending.length - inserted} were duplicates or no-op).`)
+  console.log(`\n✓ DONE. ${inserted} new rows in price_history_v2 (${pending.length - inserted} were duplicates).`)
 }
 
 main()
