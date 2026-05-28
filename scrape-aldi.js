@@ -55,6 +55,7 @@ const TOP_LEVEL_CATEGORIES = {
   'snacks-confectionery': '1588161408332087',
   'lower-prices': '1588161425841179',
   'higher-protein-food-and-drink': '1588161427774115',
+  'super-savers': '1588161426952145',
 }
 
 async function discoverCategories() {
