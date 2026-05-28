@@ -47,6 +47,45 @@ function extractSize(name, sizeField) {
   return m ? (m[1] + m[2]).toLowerCase() : ''
 }
 
+// Variant qualifiers — words/phrases that distinguish a product variant from
+// the "base" version. If one side has any of these and the other doesn't,
+// they're different products even when brand + size match. Added 2026-05-28
+// after the matcher false-merged Coles a2 Full Cream Milk 2L with Woolies a2
+// Milk Lactose Free Light 2L (shared brand+size, visually similar cartons,
+// Layer 0.5 image-pHash picked the wrong pair).
+//
+// Order matters: longer phrases checked first via the regex pattern below.
+const VARIANT_QUALIFIERS = [
+  'lactose free', 'gluten free', 'dairy free', 'sugar free', 'fat free',
+  'no added sugar', 'reduced sugar', 'reduced fat', 'low fat', 'low carb',
+  'high protein', 'long life', 'no salt', 'extra light', 'extra creamy',
+  'extra virgin', 'unsweetened',
+  'light', 'lite', 'skim', 'decaf', 'decaffeinated',
+  'salted', 'unsalted', 'organic', 'uht', 'diet', 'zero', 'keto', 'vegan',
+  'wholemeal', 'whole grain', 'multigrain',
+]
+
+function variantQualifiers(name) {
+  const n = (name || '').toLowerCase()
+  const found = new Set()
+  for (const q of VARIANT_QUALIFIERS) {
+    if (new RegExp(`\\b${q.replace(/\s+/g, '\\s+')}\\b`).test(n)) found.add(q)
+  }
+  return found
+}
+
+// Two names are variant-compatible iff they carry exactly the same set of
+// variant qualifiers. "Full Cream Milk" vs "Lactose Free Milk" — different
+// qualifier sets ({} vs {lactose free}) → REJECT. "Full Cream Milk" vs
+// "Pure Full Cream Milk" — same qualifier sets ({}) → ALLOW.
+function variantsMatch(nameA, nameB) {
+  const a = variantQualifiers(nameA)
+  const b = variantQualifiers(nameB)
+  if (a.size !== b.size) return false
+  for (const q of a) if (!b.has(q)) return false
+  return true
+}
+
 function extractCoreName(name, brand) {
   let n = normalize(name)
   // Remove brand from name
@@ -186,18 +225,24 @@ function matchLayer05(products, existingMatched) {
     const wwList    = wwByKey.get(key)    || []
     const aldiList  = aldiByKey.get(key)  || []
 
-    // Coles → Woolies + Aldi
+    // Coles → Woolies + Aldi. Variant guard added 2026-05-28: when multiple
+    // products share brand+size (e.g. a2 Milk Full Cream / Lactose Free /
+    // Lactose Free Light, all 2L), image-pHash alone is not enough to
+    // distinguish them — the cartons look visually similar. Require matching
+    // variant-qualifier sets to reject Full Cream ↔ Lactose Free Light pairs.
     for (const cp of colesList) {
       if (matched.has(`coles_${cp.product_id}`)) continue
       let bestWW = null, bestWWDist = IMAGE_HASH_THRESHOLD + 1
       for (const wp of wwList) {
         if (matched.has(`woolworths_${wp.product_id}`)) continue
+        if (!variantsMatch(cp.name, wp.name)) continue
         const d = hammingDistance(cp.image_phash, wp.image_phash)
         if (d <= IMAGE_HASH_THRESHOLD && d < bestWWDist) { bestWW = wp; bestWWDist = d }
       }
       let bestAldi = null, bestAldiDist = IMAGE_HASH_THRESHOLD + 1
       for (const ap of aldiList) {
         if (matched.has(`aldi_${ap.product_id}`)) continue
+        if (!variantsMatch(cp.name, ap.name)) continue
         const d = hammingDistance(cp.image_phash, ap.image_phash)
         if (d <= IMAGE_HASH_THRESHOLD && d < bestAldiDist) { bestAldi = ap; bestAldiDist = d }
       }
@@ -221,6 +266,7 @@ function matchLayer05(products, existingMatched) {
       let bestAldi = null, bestAldiDist = IMAGE_HASH_THRESHOLD + 1
       for (const ap of aldiList) {
         if (matched.has(`aldi_${ap.product_id}`)) continue
+        if (!variantsMatch(wp.name, ap.name)) continue
         const d = hammingDistance(wp.image_phash, ap.image_phash)
         if (d <= IMAGE_HASH_THRESHOLD && d < bestAldiDist) { bestAldi = ap; bestAldiDist = d }
       }
@@ -315,6 +361,7 @@ function matchLayer2(products, existingMatched) {
         const bothStoreBrand = storeBrands.has(cb) && storeBrands.has(wb)
         if (!bothStoreBrand) continue
       }
+      if (!variantsMatch(cp.name, wp.name)) continue
       if (levenshtein(cp.core, wp.core) <= 3 && cp.core.length > 5) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
@@ -361,6 +408,7 @@ function matchLayer3(products, existingMatched) {
       // because the brand-name tokens differ ("australian ... milk" vs
       // "woolworths ... milk uht") and drag the sort-ratio down even though the
       // product is the same. Veto already guarantees both sides are store brands.
+      if (!variantsMatch(cp.name, wp.name)) continue
       const threshold = bothStoreBrand ? 0.65 : 0.80
       if (tokenSortRatio(cp.normalized, wp.normalized) >= threshold) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
@@ -395,6 +443,7 @@ function matchLayer4(products, existingMatched) {
       const cb = normalize(cp.brand || '')
       // Only match to store-brand or brandless Coles products
       if (cb && !storeBrands.has(cb)) continue
+      if (!variantsMatch(ap.name, cp.name)) continue
       if (tokenSortRatio(ap.core, cp.core) >= 0.75) { bestColes = cp; break }
     }
 
@@ -403,6 +452,7 @@ function matchLayer4(products, existingMatched) {
       if (matched.has(`woolworths_${wp.product_id}`)) continue
       const wb = normalize(wp.brand || '')
       if (wb && !storeBrands.has(wb)) continue
+      if (!variantsMatch(ap.name, wp.name)) continue
       if (tokenSortRatio(ap.core, wp.core) >= 0.75) { bestWW = wp; break }
     }
 
@@ -513,9 +563,21 @@ async function main() {
   console.log(`  3-store matches: ${with3}`)
   console.log(`  2-store matches: ${with2}`)
 
-  // Save
-  const saved = await saveGroups(allGroups)
-  console.log(`\nSaved ${saved} groups to product_groups table`)
+  // Save — default is DRY-RUN (writes to JSON for audit). Pass --apply to
+  // actually mutate product_groups. Audit dry-run output before applying:
+  //   node match-products.js                  # dry-run
+  //   node match-products.js --apply          # write to DB
+  const APPLY = process.argv.includes('--apply')
+  if (APPLY) {
+    const saved = await saveGroups(allGroups)
+    console.log(`\nSaved ${saved} groups to product_groups table`)
+  } else {
+    const fs = require('fs')
+    const outPath = '/tmp/match-dryrun.json'
+    fs.writeFileSync(outPath, JSON.stringify(allGroups, null, 2))
+    console.log(`\nDRY-RUN: wrote ${allGroups.length} groups to ${outPath} (no DB writes)`)
+    console.log(`Re-run with --apply to commit to product_groups table.`)
+  }
 
   await pool.end()
 }

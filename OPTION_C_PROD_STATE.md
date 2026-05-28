@@ -118,3 +118,51 @@ Things that do NOT require approval:
 - Reading the data (queries, dashboards, observability)
 - Adding tests that pin down current behaviour
 - Documentation updates that don't change semantics
+
+## 2026-05-28 — Matcher hardened with variant guards
+
+User reported a2 Milk 2L not showing Coles/Woolies in the compare
+modal. Diagnosed → `product_groups` had no row linking the SKUs.
+First rebuild attempt false-merged Coles a2 Full Cream Milk 2L
+with Woolies a2 Milk Lactose Free Light 2L — Layer 0.5 (image
+pHash) bucketed only by brand+size and pHashes for visually
+similar carton designs hit Hamming ≤6.
+
+### Variant qualifier guard (match-products.js)
+
+Added `VARIANT_QUALIFIERS` set (33 phrases): `lactose free`,
+`gluten free`, `dairy free`, `sugar free`, `fat free`, `no added
+sugar`, `reduced sugar`, `reduced fat`, `low fat`, `low carb`,
+`high protein`, `long life`, `no salt`, `extra light`, `extra
+creamy`, `extra virgin`, `unsweetened`, `light`, `lite`, `skim`,
+`decaf`, `decaffeinated`, `salted`, `unsalted`, `organic`, `uht`,
+`diet`, `zero`, `keto`, `vegan`, `wholemeal`, `whole grain`,
+`multigrain`.
+
+`variantsMatch(nameA, nameB)` requires symmetric qualifier-set
+match. Applied as a guard in Layers 0.5, 2, 3, 4 (the layers
+where variant mismatches were possible). Layers 0 and 1 already
+use exact name match, so they don't need the extra guard.
+
+### Default behaviour change — `--apply` flag
+
+`match-products.js` now defaults to **dry-run** (writes 3,809
+groups to `/tmp/match-dryrun.json` for audit) instead of mutating
+`product_groups` directly. Pass `--apply` to commit. The
+TRUNCATE-then-INSERT pattern in `saveGroups()` is unchanged;
+this just gates execution.
+
+### Apply result (2026-05-28)
+
+- Pre-rebuild baseline: 2,462 groups
+- Hardened rebuild: **3,809 groups** (+1,347 net new correct matches)
+- 41 three-store matches, 3,768 two-store
+- The unhardened run would have produced 3,925 groups — 116 of
+  those were variant-mismatched false merges, all now rejected
+- Backup of pre-rebuild state at `/tmp/product_groups_backup_20260528_050745.sql` on VM (full restore is ~5s)
+
+### Verified post-apply
+
+`/api/compare?productId=9760091&store=coles` (Coles a2 Full Cream
+Milk 2L) → matched, returns Coles + Woolies pair correctly.
+Same for Lactose Free (different pair) and Lactose Free Light.
