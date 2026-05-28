@@ -263,9 +263,15 @@ async function shadowInsertPriceHistoryV2(prices) {
   for (const r of lastRows) lastByKey.set(`${r.internal_id}_${r.store}`, parseFloat(r.price))
 
   const changed = resolved.filter(p => {
+    // CHECK (price > 0) constraint on price_history_v2 — one bad row poisons
+    // the whole batch INSERT (entire page's writes rolled back). Drop here so
+    // shadow-write keeps v2 density aligned with v1.
+    if (!p.price || parseFloat(p.price) <= 0) return false
     const last = lastByKey.get(`${p.internal_id}_${p.store}`)
     return last === undefined || last !== parseFloat(p.price)
   })
+  const dropped = resolved.length - changed.length
+  if (dropped > 0) console.log(`  [shadow-v2] skipped ${dropped} rows with price <= 0`)
   if (!changed.length) return
 
   // 5 placeholders per row (internal_id, store, price, was_price, is_on_special)
