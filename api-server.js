@@ -196,11 +196,21 @@ app.get('/api/search-products', async (req, res) => {
     ? [requestedStore]
     : ['coles', 'woolworths', 'aldi']
 
-  // For special_type queries, the price-ratio threshold defines the filter.
-  // - 'weekly' : any current special (price < was_price, is_on_special=true)
-  // - 'half'   : ≥ 45% off (price <= was_price * 0.55) — tolerant for "near half-price"
-  // - 'clearance' : ≥ 60% off — typically deep-discount clearance
-  const SPECIAL_RATIO = { half: 0.55, weekly: 1.0, clearance: 0.4 }
+  // For special_type queries, the price ratio defines the filter band.
+  // 'half'      : RANGE 35-65% off (price is 35-65% of was_price). Centred on
+  //               true half-price ± 15% tolerance. Anything deeper than 65%
+  //               off is Clearance, NOT half-price.
+  //               Fix 2026-05-28: was a single-sided ≥45% off threshold,
+  //               which mis-tagged 78%-off Schwarzkopf as "Half Price".
+  // 'clearance' : 65%+ off (price ≤ 35% of was_price). The "blow it out"
+  //               clearance tier.
+  // 'weekly'    : any current special (any positive discount where
+  //               is_on_special=true).
+  const SPECIAL_BAND = {
+    half:      { min: 0.35, max: 0.65 },
+    weekly:    { min: 0.0,  max: 1.0  },
+    clearance: { min: 0.0,  max: 0.35 },
+  }
 
   try {
     const allRows = []
@@ -210,8 +220,8 @@ app.get('/api/search-products', async (req, res) => {
         // Path A: filter price_history first (small result set), then join
         // products. Avoids the LIMIT-before-filter problem the q-path would
         // hit when most products aren't on special.
-        const ratio = SPECIAL_RATIO[specialType]
-        const params = [store, ratio]
+        const band = SPECIAL_BAND[specialType]
+        const params = [store, band.min, band.max]
         let foodClause = ''
         if (foodOnly) {
           params.push(FOOD_CATEGORIES)
@@ -239,7 +249,8 @@ app.get('/api/search-products', async (req, res) => {
                 AND is_on_special = true
                 AND price > 0
                 AND was_price > price
-                AND price <= was_price * $2
+                AND price >  was_price * $2
+                AND price <= was_price * $3
               ORDER BY store, product_id, scraped_at DESC
            )
            SELECT p.store, p.product_id, p.name, p.brand, p.size, p.image, p.category,

@@ -222,3 +222,17 @@ sequential Render proxy queries (~16s cold). Now ~200-300ms.
 - Filters price_history first, then joins products → fast even
   when most products aren't on special
 - Optional name + food_only filters compose on top
+
+## 2026-05-28 (latest) — Half Price band fix
+
+`SPECIAL_RATIO` (single number) → `SPECIAL_BAND` ({min, max}).
+Half Price now requires `0.35 < price/was_price ≤ 0.65` (i.e.,
+35-65% off, ± 15% tolerance around true half-price). User
+reported 78%-off Schwarzkopf was getting mis-tagged as Half
+Price; now correctly routes to Clearance.
+
+| special_type | Band | Median pctOff (n=200) |
+|---|---|---|
+| half | 0.35 < ratio ≤ 0.65 | 50% |
+| clearance | ratio ≤ 0.35 | 75% |
+| weekly | any | 50% |
