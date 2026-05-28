@@ -236,3 +236,77 @@ Price; now correctly routes to Clearance.
 | half | 0.35 < ratio ≤ 0.65 | 50% |
 | clearance | ratio ≤ 0.35 | 75% |
 | weekly | any | 50% |
+
+## 2026-05-29 — Security hardening (P0)
+
+Two P0 issues surfaced during morning code review of `api-server.js`:
+
+### 1. Hard-coded Postgres password removed
+
+`api-server.js` had `password: 'KHGZmj4hqqDfutFw3h2E'` literal in
+the `new Pool()` block (committed in `1ab312d` on 2026-05-28 —
+the "source-of-truth gap closed" commit *also* pushed the
+secret to GitHub). `db.js` (used by every scraper) already
+sourced from `process.env.DB_PASSWORD`, so the env path
+existed — `api-server.js` just didn't use it.
+
+**Fixed:**
+```js
+const pool = new Pool({
+  host: 'localhost',
+  port: 5432,
+  database: 'pricemate',
+  user: 'pricemate',
+  password: process.env.DB_PASSWORD,
+})
+if (!process.env.DB_PASSWORD) {
+  console.error('FATAL: DB_PASSWORD env var is not set'); process.exit(1)
+}
+```
+
+**VM rotation steps (done before commit — order matters; if you
+commit first, the new code starts up without DB_PASSWORD set
+and the API goes down):**
+
+```bash
+# On VM:
+sudo -u postgres psql -c "ALTER USER pricemate WITH PASSWORD '<NEW>';"
+# Append to systemd EnvironmentFile (same one holding RESEND_API_KEY):
+#   Environment="DB_PASSWORD=<NEW>"
+sudo systemctl daemon-reload
+sudo systemctl restart pricemate-api
+curl http://localhost:3001/health  # verify
+# Then on dev box:
+cd ~/aws/projects/pricemate-proxy && git push
+```
+
+**Why no `git filter-repo` history scrub:** private solo repo,
+rotation makes the leaked literal inert, force-pushing rewritten
+history would break any existing deploy clones referencing old
+SHAs. Worth doing only if the repo ever goes public.
+
+### 2. SQL injection on `/api/price-history` (v1 endpoint)
+
+Line 41 interpolated `req.query.days` straight into the SQL
+string: `INTERVAL '${days} days'`. The v2 endpoint at line 63
+already used the safe pattern `($3 || ' days')::interval` — fix
+was to apply the same pattern to v1.
+
+| Before | After |
+|---|---|
+| `INTERVAL '${days} days'` (string-built) | `($3 \|\| ' days')::interval` with `[..., String(days)]` |
+
+Severity in practice: low (the endpoint is read-only, no auth
+gate, only exposes price data — but injectable means it could
+return arbitrary rows from any table via `UNION SELECT`).
+
+### Still open from the same review (not in this commit)
+
+- API has zero access control on 10 endpoints — needs `x-api-key` middleware.
+- No `helmet`, no `express-rate-limit` middleware installed.
+- 8 other files (`backfill-internal-ids`, `compute-image-hashes`,
+  `enrich-barcodes-from-off`, `ingest-hagglers-history`,
+  `match-products`, `review-matches`, `send-alerts`, `api-server`)
+  each construct their own `new Pool()` instead of importing
+  the existing `db.js` shared pool. Mechanical consolidation
+  pass deferred.

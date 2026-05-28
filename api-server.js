@@ -4,10 +4,19 @@ const alerts = require('./alerts')
 const app = express()
 app.use(express.json())
 
+// Password sourced from systemd EnvironmentFile on the VM (DB_PASSWORD).
+// Never hard-code — git history before 2026-05-29 contains a leaked literal;
+// it has been rotated server-side, so the old value in history is now inert.
 const pool = new Pool({
-  host: 'localhost', port: 5432, database: 'pricemate',
-  user: 'pricemate', password: 'KHGZmj4hqqDfutFw3h2E'
+  host: 'localhost',
+  port: 5432,
+  database: 'pricemate',
+  user: 'pricemate',
+  password: process.env.DB_PASSWORD,
 })
+if (!process.env.DB_PASSWORD) {
+  console.error('FATAL: DB_PASSWORD env var is not set'); process.exit(1)
+}
 
 app.get('/api/products', async (req, res) => {
   const { store, name, product_id, limit = 100, offset = 0 } = req.query
@@ -38,8 +47,8 @@ app.get('/api/price-history', async (req, res) => {
   const { store, product_id, days = 180 } = req.query
   if (!store || !product_id) return res.status(400).json({ error: 'store and product_id required' })
   const { rows } = await pool.query(
-    `SELECT price, was_price, is_on_special, scraped_at FROM price_history WHERE store=$1 AND product_id=$2 AND scraped_at > NOW() - INTERVAL '${days} days' ORDER BY scraped_at ASC`,
-    [store, product_id]
+    `SELECT price, was_price, is_on_special, scraped_at FROM price_history WHERE store=$1 AND product_id=$2 AND scraped_at > NOW() - ($3 || ' days')::interval ORDER BY scraped_at ASC`,
+    [store, product_id, String(days)]
   )
   res.json(rows)
 })
