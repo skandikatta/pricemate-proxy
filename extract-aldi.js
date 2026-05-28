@@ -31,16 +31,33 @@ const STRATEGIES = [
   {
     name: 'data-test attributes',
     extract(html) {
-      const ids = [...html.matchAll(/product-tile-(\d+)/g)].map(m => m[1])
-      const names = [...html.matchAll(/data-test="product-tile__name"[^>]*><p[^>]*>([^<]+)/g)].map(m => m[1])
-      const prices = [...html.matchAll(/base-price__regular"><span>\$([\d.]+)/g)].map(m => parseFloat(m[1]))
-      // Aldi Special Buys: was-price appears in a separate span when on sale.
-      // Tiles WITHOUT a was-price get null aligned to product index — null means
-      // "not on sale" downstream.
-      const wasPrices = [...html.matchAll(/data-test="product-tile__was-price"[^>]*><[^>]*>\$([\d.]+)/g)].map(m => parseFloat(m[1]))
-      const images = [...html.matchAll(/product-tile__picture"><img[^>]*src="([^"]+)"/g)].map(m => m[1])
-      const brands = [...html.matchAll(/data-test="product-tile__brandname"[^>]*><p[^>]*>([^<]+)/g)].map(m => m[1].trim())
-      const units  = [...html.matchAll(/data-test="product-tile__unit-of-measurement"[^>]*>(?:<[^>]*>)*([^<]+)/g)].map(m => m[1].trim())
+      // Per-tile extraction. Flat matchAll on the whole page misaligned wasPrices
+      // (only sale tiles produce a was-price match, so index N in wasPrices did
+      // not correspond to product N). Splitting on the tile id anchor first
+      // guarantees each field — including a missing was-price → null — stays
+      // bound to the correct product.
+      const anchors = [...html.matchAll(/id="product-tile-\d+"/g)]
+      const ids = [], names = [], prices = [], wasPrices = [], images = [], brands = [], units = []
+      for (let i = 0; i < anchors.length; i++) {
+        const start = anchors[i].index
+        const end = i + 1 < anchors.length ? anchors[i + 1].index : html.length
+        const tile = html.slice(start, end)
+        const idM    = tile.match(/product-tile-(\d+)/)
+        const nameM  = tile.match(/data-test="product-tile__name"[^>]*><p[^>]*>([^<]+)/)
+        const priceM = tile.match(/base-price__regular"><span>\$([\d.]+)/)
+        if (!idM || !nameM || !priceM) continue
+        const wasM   = tile.match(/data-test="product-tile__was-price"[^>]*><[^>]*>\$([\d.]+)/)
+        const imgM   = tile.match(/product-tile__picture"><img[^>]*src="([^"]+)"/)
+        const brandM = tile.match(/data-test="product-tile__brandname"[^>]*><p[^>]*>([^<]+)/)
+        const unitM  = tile.match(/data-test="product-tile__unit-of-measurement"[^>]*>(?:<[^>]*>)*([^<]+)/)
+        ids.push(idM[1])
+        names.push(nameM[1])
+        prices.push(parseFloat(priceM[1]))
+        wasPrices.push(wasM ? parseFloat(wasM[1]) : null)
+        images.push(imgM ? imgM[1] : null)
+        brands.push(brandM ? brandM[1].trim() : null)
+        units.push(unitM ? unitM[1].trim() : null)
+      }
       const sizes = names.map((n, i) => parseSizeFromName(n) || (units[i] ? units[i].toLowerCase().replace(/\s+/g, '') : null))
       return { ids, names, prices, wasPrices, images, brands, sizes }
     }
