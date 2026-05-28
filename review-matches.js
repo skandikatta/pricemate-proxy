@@ -7,16 +7,8 @@
 //   n = wrong match ❌ (removes from product_groups)
 //   s = skip (unsure, review later)
 //   q = quit (saves progress)
-
-const { Pool } = require('pg')
 const readline = require('readline')
-
-const pool = new Pool({
-  host: process.env.DB_HOST, port: 5432,
-  database: 'pricemate', user: 'pricemate',
-  password: process.env.DB_PASSWORD,
-})
-
+const { pool } = require('./db')
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 const ask = (q) => new Promise(r => rl.question(q, r))
 

@@ -17,23 +17,12 @@
 // image_phash column).
 
 const sharp = require('sharp')
-const { Pool } = require('pg')
-
 const STORES = ['coles', 'woolworths', 'aldi']
 const RATE_MS_PER_STORE = 200       // ~5 req/sec per host
 const COMMIT_EVERY = 100             // flush DB updates every N products
 const FETCH_TIMEOUT_MS = 15000       // 15s per image
 const MAX_RETRIES_PER_IMAGE = 2
-
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: 5432,
-  database: process.env.PGDATABASE || 'pricemate',
-  user: process.env.PGUSER || 'pricemate',
-  password: process.env.DB_PASSWORD,
-  max: 8,
-})
-
+const { pool } = require('./db')
 // ─────────────────────────────────────────────────────────────────────────────
 // PG bigint round-trip: aHash is naturally 0..2^64-1 unsigned, but PG bigint
 // is signed (-2^63 .. 2^63-1). Map high half to negative; reverse on read.

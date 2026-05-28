@@ -1,15 +1,23 @@
 // db.js — shared PostgreSQL connection for all scrapers
 const { Pool } = require('pg')
 
+// Shared pool used by api-server.js (continuous), send-alerts.js (daily cron),
+// and the one-shot ingest/match/review scripts. max:10 is api-server-driven —
+// it's the only file with concurrent traffic; one-shots will at most spike to
+// a few connections each. host falls back to localhost so VM-hosted scripts
+// (running on the same box as Postgres) work without DB_HOST being set.
 const pool = new Pool({
-  host: process.env.DB_HOST,
+  host: process.env.DB_HOST || 'localhost',
   port: 5432,
   database: 'pricemate',
   user: 'pricemate',
   password: process.env.DB_PASSWORD,
-  max: 5,
+  max: 10,
   idleTimeoutMillis: 30000,
 })
+if (!process.env.DB_PASSWORD) {
+  console.error('FATAL: DB_PASSWORD env var is not set'); process.exit(1)
+}
 
 /**
  * Normalize a product name for matching.
@@ -309,6 +317,7 @@ async function insertPriceChangesWrapped(prices) {
 async function close() { await pool.end() }
 
 module.exports = {
+  pool, // shared Pool — see Phase 3 consolidation 2026-05-29
   upsertProducts: upsertProductsWrapped,
   insertPriceChanges: insertPriceChangesWrapped,
   close,

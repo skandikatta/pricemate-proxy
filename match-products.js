@@ -1,14 +1,7 @@
 // match-products.js — 4-layer aggressive product matcher
 // Matches same products across Coles, Woolworths, Aldi
 // Run: node match-products.js
-
-const { Pool } = require('pg')
-const pool = new Pool({
-  host: process.env.DB_HOST, port: 5432,
-  database: 'pricemate', user: 'pricemate',
-  password: process.env.DB_PASSWORD,
-})
-
+const { pool } = require('./db')
 // --- House brand equivalents (Aldi house brands → what they actually are) ---
 const HOUSE_BRANDS = {
   // Aldi brands → generic category

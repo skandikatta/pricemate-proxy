@@ -1,5 +1,4 @@
 const express = require('express')
-const { Pool } = require('pg')
 const helmet = require('helmet')
 const rateLimit = require('express-rate-limit')
 const alerts = require('./alerts')
@@ -25,17 +24,7 @@ app.use(express.json())
 // Password sourced from systemd EnvironmentFile on the VM (DB_PASSWORD).
 // Never hard-code — git history before 2026-05-29 contains a leaked literal;
 // it has been rotated server-side, so the old value in history is now inert.
-const pool = new Pool({
-  host: 'localhost',
-  port: 5432,
-  database: 'pricemate',
-  user: 'pricemate',
-  password: process.env.DB_PASSWORD,
-})
-if (!process.env.DB_PASSWORD) {
-  console.error('FATAL: DB_PASSWORD env var is not set'); process.exit(1)
-}
-
+const { pool } = require('./db')
 app.get('/api/products', async (req, res) => {
   const { store, name, product_id, limit = 100, offset = 0 } = req.query
   let q = 'SELECT * FROM products WHERE 1=1'

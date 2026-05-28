@@ -22,8 +22,6 @@
 //
 // Local dev: set env in .env; if RESEND_API_KEY is missing, the script
 // logs what it would send instead of actually sending. Safe to dry-run.
-
-const { Pool } = require('pg')
 const { Resend } = require('resend')
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'https://cheapasmate.com'
@@ -35,15 +33,7 @@ const DEDUP_DAYS = 14         // don't re-alert same product within 14d
 
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null
 if (!resend) console.warn('[send-alerts] RESEND_API_KEY not set — DRY RUN mode')
-
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: 5432,
-  database: 'pricemate',
-  user: 'pricemate',
-  password: process.env.DB_PASSWORD,
-})
-
+const { pool } = require('./db')
 const storeUrl = {
   coles:      (id, _name) => `https://www.coles.com.au/product/${id}`,
   woolworths: (id, _name) => `https://www.woolworths.com.au/shop/productdetails/${id}`,

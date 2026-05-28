@@ -33,7 +33,6 @@
 
 const fs = require('fs')
 const path = require('path')
-const { Pool } = require('pg')
 const {
   normalize, extractCoreName, extractSize, tokenSortRatio,
 } = require('./match-products')
@@ -48,16 +47,7 @@ const args = process.argv.slice(2)
 const APPLY = args.includes('--apply')
 const STORE_FILTER = args.includes('--store') ? args[args.indexOf('--store') + 1] : null
 const dataFile = args.find(a => /\.json$/.test(a)) || 'hagglers-data.json'
-
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: 5432,
-  database: process.env.PGDATABASE || 'pricemate',
-  user: process.env.PGUSER || 'pricemate',
-  password: process.env.DB_PASSWORD,
-  max: 5,
-})
-
+const { pool } = require('./db')
 // Tokens that can't be the start of a brand. Used by reExtractBrand and the
 // strictBrandCheck.
 const STOPWORDS = new Set([

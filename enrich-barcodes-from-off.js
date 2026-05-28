@@ -17,20 +17,9 @@
 
 const fs = require('fs')
 const readline = require('readline')
-const { Pool } = require('pg')
-
 const OFF_CSV = process.env.OFF_CSV || '/home/ubuntu/off_australia.csv'
 const MIN_NAME_LEN = 6  // skip products with names too short to confidently match
-
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: 5432,
-  database: 'pricemate',
-  user: 'pricemate',
-  password: process.env.DB_PASSWORD,
-  max: 4,
-})
-
+const { pool } = require('./db')
 // Reuse normalization logic from match-products.js (kept local to avoid coupling)
 function normalize(s) {
   return (s || '').toLowerCase()

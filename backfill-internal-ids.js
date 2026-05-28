@@ -22,7 +22,6 @@
 const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
-const { Pool } = require('pg')
 const {
   normalize, extractCoreName, extractSize,
   matchLayer0, matchLayer05, matchLayer1, matchLayer2, matchLayer3, matchLayer4,
@@ -30,16 +29,7 @@ const {
 
 const DRY_RUN = !process.argv.includes('--apply')
 const STORES = ['coles', 'woolworths', 'aldi']
-
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: 5432,
-  database: process.env.PGDATABASE || 'pricemate',
-  user: process.env.PGUSER || 'pricemate',
-  password: process.env.DB_PASSWORD,
-  max: 5,
-})
-
+const { pool } = require('./db')
 async function loadAllProducts() {
   const { rows } = await pool.query(
     `SELECT store, product_id, name, brand, size, category, image, barcode, image_phash
