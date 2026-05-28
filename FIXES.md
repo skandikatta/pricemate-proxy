@@ -44,3 +44,27 @@ COMMIT;
 - Live Aldi categories fetched today (dairy-eggs-fridge, pantry, special-buys, frozen) had 0 was-price spans, so old/new agreed at 0 specials — couldn't reproduce the bug on live data because Aldi has no active specials in those categories right now. Math of the bug (mismatched-length flat-array zip) is independent of which page; synthetic proof is sufficient.
 
 **Workflow disable note:** `gh workflow disable scrape-aldi.yml` returned HTTP 403 — the local `gh` token is on `saikandikatta` user, repo is owned by `skandikatta`. Git over SSH (host alias `github-skandikatta`) works for push, but the GH Actions admin API does not. The fix push lands well before tonight's 20:00 UTC scheduled run, so the cron stays as-is.
+
+---
+
+## 2026-05-29 — Aldi scraper audit fixes (5 items, one commit)
+
+Audit pointed out remaining quality issues in `scrape-aldi.js` / `extract-aldi.js` after the was_price fix. All 5 addressed in this commit:
+
+1. **Retry on transient fetch errors** — Added `fetchWithRetry(url, { retries: 3 })` mirroring the Coles/Woolies pattern. Retries on 5xx + network errors with exp backoff (1s/2s/4s), 4xx returns immediately. Used in both `discoverCategories` and `scrapeCategory`. Previously a single transient blip killed an entire category.
+
+2. **Per-request timeout** — Each `fetch` now passes `AbortSignal.timeout(15000)`. Aldi categories rarely take >5s; the GH Actions 30-min cap was the only safety net before. Slow-but-not-failing responses no longer hang.
+
+3. **cup_price extraction (price per unit)** — Strategy 1 now extracts `cup_price` per tile (prefers `data-test="product-tile__cup-price"` / `comparison-price` / `price-per-unit`, falls back to free-text `"$X per Ng"` regex). Threaded through `extractProducts` → `scrape-aldi.js` → `db.js`. **DB schema:** `cup_price text` column already existed in `price_history`, but **no scraper was writing it** (verified: aldi 0/8, woolies 0/1081, coles 0/84 over last 2 days). `insertPriceChanges` now accepts and writes `cup_price` — existing Coles/Woolies callers pass nothing → null (no behavior change for them). `price_history_v2` (shadow-write) intentionally **not** updated — would need a schema migration, which gates on [[feedback_option_c_approval_gate]] explicit approval. Filed as deferred item.
+
+4. **In-memory dedup across categories** — Products appearing in multiple categories (e.g. "lower-prices" overlaps with "pantry") now collapse via a `Map` keyed by `product_id` before `upsertProducts`. `db.js insertPriceChanges` already dedupes server-side, but doing it client-side too saves an `upsertProducts` round-trip and keeps `SCRAPE_SUMMARY.total` honest.
+
+5. **Pagination safety cap** — Added explicit `MAX_PAGES_PER_CATEGORY = 100` loop guard. Real Aldi categories top out around 10-15 pages; if the existing terminators (`http-equiv="refresh"` redirect + `products.length === 0`) ever break, the cap prevents an unbounded loop. Emits a warning when hit so the bug surfaces in the next-day review.
+
+**DB write batch math:** column count 5 → 6, so `MAX_PRICE_BATCH` 13000 → 10000 to stay under the 65535 placeholder cap (6 × 10000 = 60000).
+
+**Files changed:** `extract-aldi.js`, `scrape-aldi.js`, `db.js`.
+
+**Verification:** synthetic HTML (3 tiles with mixed cup-price markers + no-cup-price) — extraction returns `"$1.75 per L"`, `"$2.40 per 100g"`, `null` per tile. `node --check` clean on all 3 files. All 5 marker checks in the patched files: PASS.
+
+**Deferred:** `cup_price` for `price_history_v2` (shadow write) — needs schema migration approval. Coles + Woolies `cup_price` extraction — separate per-scraper work, audit was wrong that they were already writing it.

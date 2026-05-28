@@ -96,17 +96,17 @@ async function insertPriceChanges(prices) {
 
   if (!changed.length) return 0
 
-  // 5 cols × 13000 rows = 65000, safely under the 65535 placeholder cap.
-  const MAX_PRICE_BATCH = 13000
+  // 6 cols × 10000 rows = 60000, safely under the 65535 placeholder cap.
+  const MAX_PRICE_BATCH = 10000
   for (let i = 0; i < changed.length; i += MAX_PRICE_BATCH) {
     const batch = changed.slice(i, i + MAX_PRICE_BATCH)
     const values = batch.map((_, j) => {
-      const base = j * 5
-      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5})`
+      const base = j * 6
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6})`
     }).join(',')
-    const params = batch.flatMap(p => [p.store, p.product_id, p.price, p.was_price || null, p.is_on_special || false])
+    const params = batch.flatMap(p => [p.store, p.product_id, p.price, p.was_price || null, p.is_on_special || false, p.cup_price || null])
     await pool.query(
-      `INSERT INTO price_history (store,product_id,price,was_price,is_on_special) VALUES ${values}
+      `INSERT INTO price_history (store,product_id,price,was_price,is_on_special,cup_price) VALUES ${values}
        ON CONFLICT (store,product_id,scraped_at) DO NOTHING`,
       params
     )

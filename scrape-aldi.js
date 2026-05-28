@@ -6,6 +6,37 @@ const ALDI_BASE = 'https://www.aldi.com.au'
 // Minimum products we expect — if below this, site likely changed
 const MIN_EXPECTED_PRODUCTS = 50
 
+// Per-request timeout. Aldi categories rarely take >5s; slow responses
+// shouldn't hang forever (GH Actions 30-min cap is too coarse a net).
+const REQUEST_TIMEOUT_MS = 15000
+
+// Pagination safety guard. Real Aldi categories top out ~10-15 pages —
+// if we loop past this, pagination detection has misfired.
+const MAX_PAGES_PER_CATEGORY = 100
+
+// Retry on transient errors. Mirrors scrape-coles.js / scrape-woolworths.js.
+// 5xx + network errors retry with exp backoff; 4xx returns immediately.
+async function fetchWithRetry(url, { headers = {}, retries = 3 } = {}) {
+  let lastErr = null
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+      if (res.ok) return res
+      if (res.status >= 400 && res.status < 500) return res
+      lastErr = new Error(`HTTP ${res.status}`)
+    } catch (e) {
+      lastErr = e
+    }
+    if (attempt < retries - 1) {
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+    }
+  }
+  throw lastErr || new Error('fetchWithRetry exhausted')
+}
+
 // Hardcoded top-level category IDs (discovered May 2026)
 // These are stable — Aldi rarely changes category structure
 const TOP_LEVEL_CATEGORIES = {
@@ -29,7 +60,7 @@ const TOP_LEVEL_CATEGORIES = {
 async function discoverCategories() {
   // Try dynamic discovery first (resilient to ID changes)
   try {
-    const res = await fetch(`${ALDI_BASE}/products`, { headers: { 'User-Agent': UA } })
+    const res = await fetchWithRetry(`${ALDI_BASE}/products`, { headers: { 'User-Agent': UA } })
     if (res.ok) {
       const html = await res.text()
       const matches = [...html.matchAll(/href="\/products\/([^"]+)\/k\/(\d+)"/g)]
@@ -65,17 +96,30 @@ async function discoverCategories() {
 
 async function scrapeCategory(url) {
   let allProducts = [], page = 1
-  while (true) {
+  while (page <= MAX_PAGES_PER_CATEGORY) {
     const pageUrl = `${ALDI_BASE}${url}${page > 1 ? '?page=' + page : ''}`
-    const res = await fetch(pageUrl, { headers: { 'User-Agent': UA } })
+    let res
+    try {
+      res = await fetchWithRetry(pageUrl, { headers: { 'User-Agent': UA } })
+    } catch (e) {
+      // All retries exhausted on this page. Keep what we got from earlier pages.
+      console.warn(`    [retry-exhausted] ${pageUrl} → ${e.message}`)
+      break
+    }
     if (!res.ok) break
     const html = await res.text()
+    // Aldi sends a meta-refresh redirect when you page past the last result.
+    // Belt-and-braces: the products.length === 0 check below catches the same case
+    // if Aldi ever switches to a JS or 302 redirect.
     if (html.includes('http-equiv="refresh"')) break
     const products = extractProducts(html)
     if (products.length === 0) break
     allProducts.push(...products)
     page++
     await new Promise(r => setTimeout(r, 500))
+  }
+  if (page > MAX_PAGES_PER_CATEGORY) {
+    console.warn(`    [page-cap] hit ${MAX_PAGES_PER_CATEGORY}-page safety cap on ${url} — pagination terminator may have changed`)
   }
   return allProducts
 }
@@ -105,7 +149,7 @@ async function main() {
       }
       for (const p of products) {
         allProducts.push({ store: 'aldi', product_id: p.productId, name: p.name, brand: p.brand, size: p.size || null, category: cat.name, image: p.image })
-        allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: p.wasPrice || null, is_on_special: !!p.isOnSpecial })
+        allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: p.wasPrice || null, is_on_special: !!p.isOnSpecial, cup_price: p.cupPrice || null })
       }
       console.log(` ${products.length}`)
     } catch (e) {
@@ -132,6 +176,22 @@ async function main() {
   if (failedCategories.length > 0) {
     console.warn(`\nWARNING: ${failedCategories.length} categories returned 0 products: ${failedCategories.join(', ')}`)
   }
+
+  // Dedup across categories — a product can appear in multiple categories
+  // (e.g. 'lower-prices' overlaps with 'pantry'). db.js dedupes inside
+  // insertPriceChanges already, but doing it here too avoids passing 2x rows
+  // through upsertProducts and keeps SCRAPE_SUMMARY counts honest.
+  const productMap = new Map()
+  for (const p of allProducts) productMap.set(p.product_id, p)
+  const priceMap = new Map()
+  for (const p of allPrices) priceMap.set(p.product_id, p)
+  const dedupedProducts = [...productMap.values()]
+  const dedupedPrices = [...priceMap.values()]
+  if (dedupedProducts.length < allProducts.length) {
+    console.log(`  Deduped ${allProducts.length - dedupedProducts.length} cross-category duplicates`)
+  }
+  allProducts = dedupedProducts
+  allPrices = dedupedPrices
 
   // Still save whatever we got — partial data is better than no data
   console.log(`\nTotal: ${allProducts.length} products`)

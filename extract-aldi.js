@@ -37,7 +37,7 @@ const STRATEGIES = [
       // guarantees each field — including a missing was-price → null — stays
       // bound to the correct product.
       const anchors = [...html.matchAll(/id="product-tile-\d+"/g)]
-      const ids = [], names = [], prices = [], wasPrices = [], images = [], brands = [], units = []
+      const ids = [], names = [], prices = [], wasPrices = [], cupPrices = [], images = [], brands = [], units = []
       for (let i = 0; i < anchors.length; i++) {
         const start = anchors[i].index
         const end = i + 1 < anchors.length ? anchors[i + 1].index : html.length
@@ -50,16 +50,26 @@ const STRATEGIES = [
         const imgM   = tile.match(/product-tile__picture"><img[^>]*src="([^"]+)"/)
         const brandM = tile.match(/data-test="product-tile__brandname"[^>]*><p[^>]*>([^<]+)/)
         const unitM  = tile.match(/data-test="product-tile__unit-of-measurement"[^>]*>(?:<[^>]*>)*([^<]+)/)
+        // cup price (price-per-unit): prefer the explicit data-test attribute,
+        // fall back to a free-text "$X.XX per N(g|kg|ml|l|ea)" match within the tile.
+        let cup = null
+        const cupAttrM = tile.match(/data-test="product-tile__(?:cup-price|comparison-price|price-per-unit)"[^>]*>(?:<[^>]*>)*([^<]+)/)
+        if (cupAttrM) cup = cupAttrM[1].trim()
+        if (!cup) {
+          const cupText = tile.match(/\$\d+(?:\.\d+)?\s*per\s*\d+(?:\.\d+)?\s*(?:kg|g|ml|l|litre|liter|ea|each|pack|pk)\b/i)
+          if (cupText) cup = cupText[0].trim()
+        }
         ids.push(idM[1])
         names.push(nameM[1])
         prices.push(parseFloat(priceM[1]))
         wasPrices.push(wasM ? parseFloat(wasM[1]) : null)
+        cupPrices.push(cup)
         images.push(imgM ? imgM[1] : null)
         brands.push(brandM ? brandM[1].trim() : null)
         units.push(unitM ? unitM[1].trim() : null)
       }
       const sizes = names.map((n, i) => parseSizeFromName(n) || (units[i] ? units[i].toLowerCase().replace(/\s+/g, '') : null))
-      return { ids, names, prices, wasPrices, images, brands, sizes }
+      return { ids, names, prices, wasPrices, cupPrices, images, brands, sizes }
     }
   },
   // Strategy 2: Generic product tile with aria-labels (resilient to class renames)
@@ -132,7 +142,7 @@ const STRATEGIES = [
  */
 function extractProducts(html) {
   for (const strategy of STRATEGIES) {
-    const { ids, names, prices, wasPrices, images, brands, sizes } = strategy.extract(html)
+    const { ids, names, prices, wasPrices, cupPrices, images, brands, sizes } = strategy.extract(html)
     const count = Math.min(ids.length, names.length, prices.length)
     if (count > 0) {
       if (strategy !== STRATEGIES[0]) {
@@ -148,6 +158,7 @@ function extractProducts(html) {
           price: prices[i],
           wasPrice,
           isOnSpecial: wasPrice !== null,
+          cupPrice: (cupPrices && cupPrices[i]) || null,
           brand: brands[i] ? decodeEntities(brands[i]) : null,
           image: images[i] || null,
           size: (sizes && sizes[i]) || parseSizeFromName(cleanName) || null,
