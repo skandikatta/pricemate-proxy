@@ -167,7 +167,11 @@ app.get('/api/eligible-products', async (req, res) => {
 //                         /api/eligible-products)
 app.get('/api/search-products', async (req, res) => {
   const q = (req.query.q || '').trim()
-  if (!q) return res.status(400).json({ error: 'q required' })
+  const specialType = req.query.special_type  // 'half' | 'weekly' | 'clearance'
+  const VALID_SPECIAL = new Set(['half', 'weekly', 'clearance'])
+  const isSpecialQuery = specialType && VALID_SPECIAL.has(specialType)
+  // Either a name query OR a special_type filter is required.
+  if (!q && !isSpecialQuery) return res.status(400).json({ error: 'q or special_type required' })
   const limit = Math.min(parseInt(req.query.limit, 10) || 300, 1000)
   const requestedStore = req.query.store
   const foodOnly = req.query.food_only === '1'
@@ -178,9 +182,9 @@ app.get('/api/search-products', async (req, res) => {
   // Without this, the substring-only ILIKE missed the singular variants.
   // Conservative: only strip a final lowercase 's' from words of length ≥4
   // to avoid mangling short words like "cos" (lettuce) or "gas".
-  const qPatterns = [`%${q}%`]
-  if (q.length >= 4 && q.endsWith('s')) qPatterns.push(`%${q.slice(0, -1)}%`)
-  if (q.length >= 3 && !q.endsWith('s')) qPatterns.push(`%${q}s%`)
+  const qPatterns = q ? [`%${q}%`] : []
+  if (q && q.length >= 4 && q.endsWith('s')) qPatterns.push(`%${q.slice(0, -1)}%`)
+  if (q && q.length >= 3 && !q.endsWith('s')) qPatterns.push(`%${q}s%`)
 
   // Per-store balance: rather than one global LIMIT (which lets alphabet-
   // dense stores like Coles crowd out Aldi), query each store separately
@@ -192,45 +196,102 @@ app.get('/api/search-products', async (req, res) => {
     ? [requestedStore]
     : ['coles', 'woolworths', 'aldi']
 
+  // For special_type queries, the price-ratio threshold defines the filter.
+  // - 'weekly' : any current special (price < was_price, is_on_special=true)
+  // - 'half'   : ≥ 45% off (price <= was_price * 0.55) — tolerant for "near half-price"
+  // - 'clearance' : ≥ 60% off — typically deep-discount clearance
+  const SPECIAL_RATIO = { half: 0.55, weekly: 1.0, clearance: 0.4 }
+
   try {
     const allRows = []
     for (const store of stores) {
-      const params = [store, ...qPatterns]
-      const nameClause = qPatterns.map((_, i) => `name ILIKE $${i + 2}`).join(' OR ')
-      let foodClause = ''
-      if (foodOnly) {
-        params.push(FOOD_CATEGORIES)
-        foodClause = ` AND category = ANY($${params.length})`
-      }
-      params.push(perStoreLimit)
-      const limitParam = `$${params.length}`
-      const { rows } = await pool.query(
-        `WITH matched AS (
-           SELECT store, product_id, name, brand, size, image, category, image_phash
-             FROM products
-            WHERE store = $1
-              AND (${nameClause})
-              ${foodClause}
-            ORDER BY LOWER(name)
-            LIMIT ${limitParam}
-         )
-         SELECT m.store, m.product_id, m.name, m.brand, m.size, m.image, m.category,
-                ph.price::float AS price,
-                ph.was_price::float AS was_price,
-                ph.is_on_special,
-                ph.cup_price,
-                ph.scraped_at
-           FROM matched m
-           LEFT JOIN LATERAL (
-             SELECT price, was_price, is_on_special, cup_price, scraped_at
+      let rows
+      if (isSpecialQuery) {
+        // Path A: filter price_history first (small result set), then join
+        // products. Avoids the LIMIT-before-filter problem the q-path would
+        // hit when most products aren't on special.
+        const ratio = SPECIAL_RATIO[specialType]
+        const params = [store, ratio]
+        let foodClause = ''
+        if (foodOnly) {
+          params.push(FOOD_CATEGORIES)
+          foodClause = ` AND p.category = ANY($${params.length})`
+        }
+        // Optional name filter ON TOP of the special_type filter — supports
+        // future "special offers in coffee" style searches.
+        let nameClause = ''
+        if (qPatterns.length > 0) {
+          for (const pat of qPatterns) params.push(pat)
+          const startIdx = params.length - qPatterns.length + 1
+          nameClause = ' AND (' + qPatterns.map((_, i) => `p.name ILIKE $${startIdx + i}`).join(' OR ') + ')'
+        }
+        params.push(perStoreLimit)
+        const limitParam = `$${params.length}`
+        const result = await pool.query(
+          `WITH recent_specials AS (
+             SELECT DISTINCT ON (store, product_id) store, product_id,
+                    price::float AS price,
+                    was_price::float AS was_price,
+                    is_on_special, cup_price, scraped_at
                FROM price_history
-              WHERE store = m.store AND product_id = m.product_id
-              ORDER BY scraped_at DESC
-              LIMIT 1
-           ) ph ON true
-          WHERE ph.price IS NOT NULL`,
-        params
-      )
+              WHERE store = $1
+                AND scraped_at >= NOW() - INTERVAL '7 days'
+                AND is_on_special = true
+                AND price > 0
+                AND was_price > price
+                AND price <= was_price * $2
+              ORDER BY store, product_id, scraped_at DESC
+           )
+           SELECT p.store, p.product_id, p.name, p.brand, p.size, p.image, p.category,
+                  r.price, r.was_price, r.is_on_special, r.cup_price, r.scraped_at
+             FROM recent_specials r
+             JOIN products p ON p.store = r.store AND p.product_id = r.product_id
+            WHERE 1=1${foodClause}${nameClause}
+            ORDER BY (r.was_price - r.price) DESC NULLS LAST, LOWER(p.name)
+            LIMIT ${limitParam}`,
+          params
+        )
+        rows = result.rows
+      } else {
+        // Path B (default): name search via the matched CTE + LATERAL.
+        const params = [store, ...qPatterns]
+        const nameClause = qPatterns.map((_, i) => `name ILIKE $${i + 2}`).join(' OR ')
+        let foodClause = ''
+        if (foodOnly) {
+          params.push(FOOD_CATEGORIES)
+          foodClause = ` AND category = ANY($${params.length})`
+        }
+        params.push(perStoreLimit)
+        const limitParam = `$${params.length}`
+        const result = await pool.query(
+          `WITH matched AS (
+             SELECT store, product_id, name, brand, size, image, category, image_phash
+               FROM products
+              WHERE store = $1
+                AND (${nameClause})
+                ${foodClause}
+              ORDER BY LOWER(name)
+              LIMIT ${limitParam}
+           )
+           SELECT m.store, m.product_id, m.name, m.brand, m.size, m.image, m.category,
+                  ph.price::float AS price,
+                  ph.was_price::float AS was_price,
+                  ph.is_on_special,
+                  ph.cup_price,
+                  ph.scraped_at
+             FROM matched m
+             LEFT JOIN LATERAL (
+               SELECT price, was_price, is_on_special, cup_price, scraped_at
+                 FROM price_history
+                WHERE store = m.store AND product_id = m.product_id
+                ORDER BY scraped_at DESC
+                LIMIT 1
+             ) ph ON true
+            WHERE ph.price IS NOT NULL`,
+          params
+        )
+        rows = result.rows
+      }
       allRows.push(...rows)
     }
     res.json(allRows)
@@ -310,6 +371,58 @@ app.post('/api/predictions-batch', async (req, res) => {
     res.json(grouped)
   } catch (e) {
     console.error('[predictions-batch]', e.message)
+    res.status(500).json({ error: 'query failed' })
+  }
+})
+
+// Random sample of currently-on-special products across all 3 stores.
+// Used by /api/hero-examples pickRealSale to skip the slow 6-proxy-query
+// path (which was ~16s on Render cold start). This is ~100ms reading from
+// the DB. Returns the same shape as /api/search-products.
+app.get('/api/random-specials', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 80, 200)
+  const foodOnly = req.query.food_only === '1'
+
+  const params = []
+  let foodClause = ''
+  if (foodOnly) {
+    params.push(FOOD_CATEGORIES)
+    foodClause = ` AND p.category = ANY($${params.length})`
+  }
+  params.push(limit)
+  const limitParam = `$${params.length}`
+
+  try {
+    // Optimised: instead of DISTINCT ON across all price_history (slow), pull
+    // ONLY recent on-special rows via the scraped_at + is_on_special filter,
+    // which use idx_ph_scraped + the scraper writes ~1 row per product per
+    // scrape day. The DISTINCT ON then narrows to the truly-latest row
+    // per (store, product_id) inside the much smaller set.
+    const { rows } = await pool.query(
+      `WITH recent_specials AS (
+         SELECT DISTINCT ON (store, product_id) store, product_id,
+                price::float AS price,
+                was_price::float AS was_price,
+                is_on_special, cup_price, scraped_at
+           FROM price_history
+          WHERE scraped_at >= NOW() - INTERVAL '7 days'
+            AND is_on_special = true
+            AND price > 0
+            AND was_price > price
+          ORDER BY store, product_id, scraped_at DESC
+       )
+       SELECT p.store, p.product_id, p.name, p.brand, p.size, p.image, p.category,
+              l.price, l.was_price, l.is_on_special, l.cup_price, l.scraped_at
+         FROM recent_specials l
+         JOIN products p ON p.store = l.store AND p.product_id = l.product_id
+        WHERE 1=1 ${foodClause}
+        ORDER BY RANDOM()
+        LIMIT ${limitParam}`,
+      params
+    )
+    res.json(rows)
+  } catch (e) {
+    console.error('[random-specials]', e.message)
     res.status(500).json({ error: 'query failed' })
   }
 })

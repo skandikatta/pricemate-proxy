@@ -205,3 +205,20 @@ psql -U pricemate -d pricemate -f <backup>
 sudo systemctl restart pricemate-api
 ```
 
+
+## 2026-05-28 (late) — `special_type` filter + `/api/random-specials`
+
+Two more endpoints added to `api-server.js`:
+
+**`GET /api/random-specials?limit=N&food_only=1`** — returns N random
+currently-on-special products (recent 7 days, was_price > price >
+0). Powers hero `pickRealSale` which previously fanned out 6
+sequential Render proxy queries (~16s cold). Now ~200-300ms.
+
+**`/api/search-products` extended** with `special_type=half|weekly|clearance`:
+- half: `price <= was_price * 0.55`
+- weekly: any `is_on_special = true`
+- clearance: `price <= was_price * 0.4`
+- Filters price_history first, then joins products → fast even
+  when most products aren't on special
+- Optional name + food_only filters compose on top
