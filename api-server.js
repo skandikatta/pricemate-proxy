@@ -21,6 +21,25 @@ app.use(rateLimit({
 
 app.use(express.json())
 
+// Optional API key gate. Activated by setting API_KEY env var on the VM.
+// While API_KEY is unset, every route stays open (current behaviour, used
+// during the testing-phase rollout). Once API_KEY is set on BOTH the VM and
+// Vercel (so the frontend can include the matching x-api-key header), this
+// middleware starts rejecting anything without the right key — except /health.
+const REQUIRE_API_KEY = !!process.env.API_KEY
+if (REQUIRE_API_KEY) {
+  console.log('[api-key] strict mode — x-api-key required on all routes except /health')
+} else {
+  console.warn('[api-key] NO API_KEY env var set — API is OPEN to the internet. Set API_KEY to enforce.')
+}
+app.use((req, res, next) => {
+  if (!REQUIRE_API_KEY) return next()
+  if (req.path === '/health') return next()
+  const provided = req.headers['x-api-key']
+  if (provided && provided === process.env.API_KEY) return next()
+  return res.status(401).json({ error: 'unauthorized' })
+})
+
 // Password sourced from systemd EnvironmentFile on the VM (DB_PASSWORD).
 // Never hard-code — git history before 2026-05-29 contains a leaked literal;
 // it has been rotated server-side, so the old value in history is now inert.
