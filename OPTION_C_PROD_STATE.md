@@ -166,3 +166,42 @@ this just gates execution.
 `/api/compare?productId=9760091&store=coles` (Coles a2 Full Cream
 Milk 2L) → matched, returns Coles + Woolies pair correctly.
 Same for Lactose Free (different pair) and Lactose Free Light.
+
+## 2026-05-28 — api-server.js committed to git (source-of-truth)
+
+`api-server.js` (the Oracle VM's Express server serving DB-backed
+endpoints to Vercel) had NEVER been committed to this repo despite
+serving production traffic since 2026-05-27. This session added
+several endpoints + hardening to it; all were VM-only until now.
+If the VM died, all of it would be lost.
+
+Endpoints in the current snapshot (320 lines):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/products` | name/store search on `products` table |
+| `GET /api/prices` | latest N rows from `price_history` |
+| `GET /api/price-history` | legacy v1 timeseries |
+| `GET /api/price-history-v2` | Option C v2 timeseries via passport+aliases |
+| `GET /api/groups` | Cross-store identity lookup. **Parameterised** as of 2026-05-28 (was string-interpolation SQL-injection vector) |
+| `GET /api/eligible-products` | products with ≥ N history rows; powers hero pickFakeDiscount. Supports `food_only=1` |
+| `GET /api/search-products` | unified 3-store search with per-store balance + plural-stem (`prawns` ⇄ `prawn`). Replaces the proxy live-scrape path (which was 0-Woolies-result broken) |
+| `POST /api/predictions-batch` | NEW 2026-05-28 — batched price history fetch. Replaces the N+1 fan-out in `lib/predictions.ts:getPredictions()` (was 481 round-trips for a milk search → 1 SQL query, 7s → 1.6s) |
+| `GET /health` | liveness probe |
+
+`FOOD_CATEGORIES` constant: empirical grocery category list from
+the `products` table; used by `/api/eligible-products` and
+`/api/search-products` when `food_only=1`.
+
+### Rebuild from scratch if VM dies
+
+```bash
+# On a fresh Oracle VM:
+git clone github-skandikatta:skandikatta/pricemate-proxy ~/pricemate-proxy
+cd ~/pricemate-proxy && npm install
+# Restore Postgres dump
+psql -U pricemate -d pricemate -f <backup>
+# systemd unit + env vars (DB_PASSWORD, RESEND_API_KEY, etc.)
+sudo systemctl restart pricemate-api
+```
+
