@@ -1,7 +1,25 @@
 const express = require('express')
 const { Pool } = require('pg')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
 const alerts = require('./alerts')
 const app = express()
+
+// Real client IP through whatever proxy sits in front (nginx / Cloudflare).
+app.set('trust proxy', 1)
+
+// CSP off — this is a JSON API, no HTML responses to harden.
+app.use(helmet({ contentSecurityPolicy: false }))
+
+// 300 req/min/IP — generous for scrapers/alerts, tight enough to blunt abuse.
+app.use(rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/health',
+}))
+
 app.use(express.json())
 
 // Password sourced from systemd EnvironmentFile on the VM (DB_PASSWORD).

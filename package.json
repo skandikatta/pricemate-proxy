@@ -7,8 +7,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@react-email/render": "^2.0.8",
     "express": "^4.22.2",
-    "pg": "^8.21.0"
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "pg": "^8.21.0",
+    "resend": "^6.12.4",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "playwright": "^1.49.0",
