@@ -34,11 +34,15 @@ const STRATEGIES = [
       const ids = [...html.matchAll(/product-tile-(\d+)/g)].map(m => m[1])
       const names = [...html.matchAll(/data-test="product-tile__name"[^>]*><p[^>]*>([^<]+)/g)].map(m => m[1])
       const prices = [...html.matchAll(/base-price__regular"><span>\$([\d.]+)/g)].map(m => parseFloat(m[1]))
+      // Aldi Special Buys: was-price appears in a separate span when on sale.
+      // Tiles WITHOUT a was-price get null aligned to product index — null means
+      // "not on sale" downstream.
+      const wasPrices = [...html.matchAll(/data-test="product-tile__was-price"[^>]*><[^>]*>\$([\d.]+)/g)].map(m => parseFloat(m[1]))
       const images = [...html.matchAll(/product-tile__picture"><img[^>]*src="([^"]+)"/g)].map(m => m[1])
       const brands = [...html.matchAll(/data-test="product-tile__brandname"[^>]*><p[^>]*>([^<]+)/g)].map(m => m[1].trim())
       const units  = [...html.matchAll(/data-test="product-tile__unit-of-measurement"[^>]*>(?:<[^>]*>)*([^<]+)/g)].map(m => m[1].trim())
       const sizes = names.map((n, i) => parseSizeFromName(n) || (units[i] ? units[i].toLowerCase().replace(/\s+/g, '') : null))
-      return { ids, names, prices, images, brands, sizes }
+      return { ids, names, prices, wasPrices, images, brands, sizes }
     }
   },
   // Strategy 2: Generic product tile with aria-labels (resilient to class renames)
@@ -111,7 +115,7 @@ const STRATEGIES = [
  */
 function extractProducts(html) {
   for (const strategy of STRATEGIES) {
-    const { ids, names, prices, images, brands, sizes } = strategy.extract(html)
+    const { ids, names, prices, wasPrices, images, brands, sizes } = strategy.extract(html)
     const count = Math.min(ids.length, names.length, prices.length)
     if (count > 0) {
       if (strategy !== STRATEGIES[0]) {
@@ -120,10 +124,13 @@ function extractProducts(html) {
       const products = []
       for (let i = 0; i < count; i++) {
         const cleanName = decodeEntities(names[i])
+        const wasPrice = wasPrices && wasPrices[i] && wasPrices[i] > prices[i] ? wasPrices[i] : null
         products.push({
           productId: `aldi_${ids[i]}`,
           name: cleanName,
           price: prices[i],
+          wasPrice,
+          isOnSpecial: wasPrice !== null,
           brand: brands[i] ? decodeEntities(brands[i]) : null,
           image: images[i] || null,
           size: (sizes && sizes[i]) || parseSizeFromName(cleanName) || null,

@@ -2,7 +2,7 @@ name: Scrape Woolworths
 
 on:
   schedule:
-    - cron: "0 19 * * *"
+    - cron: "30 18 * * *"
   workflow_dispatch:
 
 jobs:

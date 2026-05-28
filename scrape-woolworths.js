@@ -1,5 +1,37 @@
-const { upsertProducts, insertPriceChanges, close } = require('./db')
+const { upsertProducts, insertPriceChanges, close, getStoreProductCount } = require('./db')
 const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
+
+// Retry on 5xx and network blips. Mirrors scrape-coles.js fetchWithRetry —
+// without this a single transient failure killed an entire department
+// (~10-15min of scrape lost).
+const MAX_PAGE_ATTEMPTS = 3
+async function fetchWithRetry(url, opts, label) {
+  let lastErr = null
+  for (let attempt = 1; attempt <= MAX_PAGE_ATTEMPTS; attempt++) {
+    try {
+      const r = await fetch(url, opts)
+      if (r.ok) return { ok: true, response: r }
+      if (r.status >= 500 && attempt < MAX_PAGE_ATTEMPTS) {
+        lastErr = `HTTP ${r.status}`
+        await new Promise(s => setTimeout(s, 1000 * Math.pow(2, attempt - 1)))
+        continue
+      }
+      return { ok: false, status: r.status, error: `HTTP ${r.status}` }
+    } catch (e) {
+      lastErr = e.message
+      if (attempt < MAX_PAGE_ATTEMPTS) {
+        await new Promise(s => setTimeout(s, 1000 * Math.pow(2, attempt - 1)))
+        continue
+      }
+    }
+  }
+  return { ok: false, error: lastErr || 'unknown' }
+}
+
+// Cookie refresh interval. Woolies session cookies appear to be ~60min TTL
+// based on observation; refreshing every 30min mid-scrape prevents the
+// silent "0 products" failure mode in later departments.
+const COOKIE_TTL_MS = 30 * 60 * 1000
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
 const MIN_EXPECTED_PRODUCTS = 100
 
@@ -70,10 +102,28 @@ async function scrapeWoolworths() {
   }
   console.log('Cookies obtained ✓')
 
+  const priorCatalogCount = await getStoreProductCount('woolworths').catch(() => null)
   const departments = await resolveDepartments()
   let total = 0, changes = 0, failedDepts = []
+  let cookiesFetchedAt = Date.now()
+  let activeCookies = cookies
 
   for (const dept of departments) {
+    // Refresh cookies if older than COOKIE_TTL_MS. Long scrapes (~1h43m total)
+    // outlive Woolies' session — without this, later departments silently
+    // returned 0 products.
+    if (Date.now() - cookiesFetchedAt > COOKIE_TTL_MS) {
+      try {
+        const refreshed = await getWoolworthsCookies()
+        if (refreshed) {
+          activeCookies = refreshed
+          cookiesFetchedAt = Date.now()
+          console.log(`  [cookies refreshed] before ${dept.name}`)
+        }
+      } catch (e) {
+        console.warn(`  [cookies refresh failed] ${e.message} — continuing with stale cookies`)
+      }
+    }
     for (let page = 1; page <= 999; page++) {
       const body = JSON.stringify({
         categoryId: dept.id, pageNumber: page, pageSize: 36, sortType: 'TraderRelevance',
@@ -85,12 +135,13 @@ async function scrapeWoolworths() {
       })
       process.stdout.write(`  ${dept.name} p${page}...`)
       try {
-        const r = await fetch(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
+        const fetched = await fetchWithRetry(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
           method: 'POST',
-          headers: { 'User-Agent': UA, 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': cookies },
+          headers: { 'User-Agent': UA, 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': activeCookies },
           body
-        })
-        if (!r.ok) { console.log(` HTTP ${r.status}, stopping`); break }
+        }, `${dept.name} p${page}`)
+        if (!fetched.ok) { console.log(` ${fetched.error}, stopping`); break }
+        const r = fetched.response
         const data = await r.json()
         const bundles = data.Bundles || []
         if (bundles.length === 0) { console.log(' empty, done'); break }
@@ -126,14 +177,28 @@ async function scrapeWoolworths() {
   if (failedDepts.length > 0) console.warn(`WARNING: Failed departments: ${failedDepts.join(', ')}`)
   console.log(`\nWoolworths done: ${total} products, ${changes} price changes`)
 
+  let degraded = false
   if (total === 0) {
     console.warn('WARNING: Zero products scraped. Woolworths API may have changed.')
     console.warn('Existing DB data preserved.')
+    degraded = true
   } else if (total < MIN_EXPECTED_PRODUCTS) {
     console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+).`)
+    degraded = true
+  } else if (priorCatalogCount && total < priorCatalogCount * 0.7) {
+    console.warn(`WARNING: ${total} products < 70% of prior catalog (${priorCatalogCount}). Likely cookie/auth degradation.`)
+    degraded = true
   }
 
-  return { total, changes, failedDepts }
+  const summary = {
+    store: 'woolworths',
+    total, changes, failedDepts, degraded,
+    priorCatalogCount,
+    completedAt: new Date().toISOString(),
+  }
+  console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
+
+  return { total, changes, failedDepts, degraded }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }

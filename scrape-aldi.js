@@ -105,7 +105,7 @@ async function main() {
       }
       for (const p of products) {
         allProducts.push({ store: 'aldi', product_id: p.productId, name: p.name, brand: p.brand, size: p.size || null, category: cat.name, image: p.image })
-        allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: null, is_on_special: false })
+        allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: p.wasPrice || null, is_on_special: !!p.isOnSpecial })
       }
       console.log(` ${products.length}`)
     } catch (e) {
@@ -138,6 +138,17 @@ async function main() {
   await upsertProducts(allProducts)
   const changes = await insertPriceChanges(allPrices)
   console.log(`Done! ${allProducts.length} products, ${changes} price changes`)
+
+  const onSpecial = allPrices.filter(p => p.is_on_special).length
+  const summary = {
+    store: 'aldi',
+    total: allProducts.length,
+    changes,
+    failedCategories,
+    onSpecial,
+    completedAt: new Date().toISOString(),
+  }
+  console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
 
   return { total: allProducts.length, changes, failedCategories }
 }

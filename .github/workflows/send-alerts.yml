@@ -26,7 +26,7 @@ jobs:
     # When triggered by workflow_run, only proceed if the parent scrape finished
     # (success OR failure — partial data is still better than no data). When
     # triggered by cron / manual, always run.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v4
 
