@@ -454,7 +454,7 @@ function matchLayer4(products, existingMatched) {
       // Only match to store-brand or brandless Coles products
       if (cb && !storeBrands.has(cb)) continue
       if (!variantsMatch(ap.name, cp.name)) continue
-      if (tokenSortRatio(ap.core, cp.core) >= 0.75) { bestColes = cp; break }
+      if (tokenOverlap(ap.core, cp.core) >= 0.65 && ap.core.length > 3) { bestColes = cp; break }
     }
 
     const wwCandidates = wwBySize.get(ap.sizeNorm) || []
@@ -463,7 +463,7 @@ function matchLayer4(products, existingMatched) {
       const wb = normalize(wp.brand || '')
       if (wb && !storeBrands.has(wb)) continue
       if (!variantsMatch(ap.name, wp.name)) continue
-      if (tokenSortRatio(ap.core, wp.core) >= 0.75) { bestWW = wp; break }
+      if (tokenOverlap(ap.core, wp.core) >= 0.65 && ap.core.length > 3) { bestWW = wp; break }
     }
 
     if (bestColes || bestWW) {
