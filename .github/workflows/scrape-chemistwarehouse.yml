@@ -1,21 +1,19 @@
 name: Scrape Chemist Warehouse
+# NOTE: CW geo-blocks non-AU IPs. This scraper must run from the Oracle VM.
+# This workflow is a placeholder — actual scrape runs on VM via:
+#   ssh ubuntu@VM 'cd ~/pricemate-proxy && DB_PASSWORD=... node scrape-chemistwarehouse.js'
+# TODO: Add VM_SSH_KEY secret to enable remote trigger from GH Actions.
 on:
-  schedule:
-    - cron: '0 20 * * *'  # 6am AEST daily
   workflow_dispatch:
 
 jobs:
-  scrape:
+  info:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: npm ci
-      - name: Scrape Chemist Warehouse
-        env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        run: node scrape-chemistwarehouse.js
+      - run: |
+          echo "⚠️ Chemist Warehouse geo-blocks non-AU IPs."
+          echo "Run from Oracle VM instead:"
+          echo "  ssh ubuntu@192.9.191.233"
+          echo "  cd ~/pricemate-proxy"
+          echo "  source <(sudo grep DB_PASSWORD /etc/systemd/system/pricemate-api.service.d/env.conf | sed 's/Environment=//;s/\"//g;s/^/export /')"
+          echo "  node scrape-chemistwarehouse.js"
