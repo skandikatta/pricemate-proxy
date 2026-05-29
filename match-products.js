@@ -15,6 +15,16 @@ const HOUSE_BRANDS = {
   'milfina': 'chocolate', 'nature\'s nectar': 'juice', 'ocean rise': 'seafood',
   'penfield': 'olives', 'radiance': 'vitamins', 'sakata': 'crackers',
   'so natural': 'milk', 'urban eats': 'meals', 'westcliff': 'tea',
+  // Added 2026-05-30: from unmatched brand audit
+  'hillcrest': 'pantry', 'ready, set…cook!': 'meals', 'stonemill': 'spices',
+  'power force': 'cleaning', 'choceur': 'chocolate', 'damora': 'pasta',
+  'portview': 'seafood', 'white mill': 'flour', 'emporium selection': 'deli',
+  'world kitchen': 'meals', 'broad oak farms': 'meat', 'chefs\' cupboard': 'pantry',
+  'imperial grain': 'rice', 'deli originals fresh': 'deli', 'specially selected': 'premium',
+  'bakers life': 'bread', 'belmont biscuit co.': 'biscuits',
+  'market fare': 'frozen', 'golden fields': 'pantry', 'harvest moon': 'juice',
+  'alcafe': 'coffee', 'dermaveen': 'skincare', 'tandil': 'cleaning',
+  'di san': 'cleaning', 'logix': 'cleaning', 'almat': 'cleaning',
 }
 
 // Known cross-store brand equivalents
