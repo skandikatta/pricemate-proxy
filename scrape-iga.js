@@ -46,42 +46,44 @@ function parseProduct(item) {
 
 async function scrapeAll(throttle, stats) {
   const products = []
-  let skip = 0
-  // First call to get total count
-  const firstUrl = `${IGA_API}/${STORE_ID}/search?q=*&take=${PAGE_SIZE}&skip=0&sort=brand`
-  const firstResult = await fetchWithRetry(firstUrl)
-  if (!firstResult.ok) throw new Error(`Initial fetch failed: ${firstResult.error}`)
-  const firstData = await firstResult.response.json()
-  const total = firstData.total || 0
-  console.log(`  Total products in store: ${total}`)
+  // IGA's search doesn't support q=* wildcard. Using broad single-char queries
+  // to cover the full catalogue. Each letter catches products whose name/brand
+  // starts with or contains that letter. Dedupe handles overlap.
+  const QUERIES = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','1','2','3']
   
-  // Process first page
-  for (const item of (firstData.items || [])) {
-    const p = parseProduct(item)
-    if (p) products.push(p)
-  }
-  stats.tick(firstData.items?.length || 0)
-  skip += PAGE_SIZE
-
-  // Paginate through all
-  while (skip < total) {
-    const url = `${IGA_API}/${STORE_ID}/search?q=*&take=${PAGE_SIZE}&skip=${skip}&sort=brand`
-    const result = await fetchWithRetry(url)
-    if (!result.ok) break
-    if (result.elapsed) throttle.record(result.elapsed)
-    const data = await result.response.json()
-    const items = data.items || []
-    if (items.length === 0) break
-    for (const item of items) {
+  for (const q of QUERIES) {
+    let skip = 0
+    const firstUrl = `${IGA_API}/${STORE_ID}/search?q=${q}&take=${PAGE_SIZE}&skip=0&sort=brand`
+    const firstResult = await fetchWithRetry(firstUrl)
+    if (!firstResult.ok) continue
+    const firstData = await firstResult.response.json()
+    const total = firstData.total || 0
+    if (total === 0) continue
+    
+    for (const item of (firstData.items || [])) {
       const p = parseProduct(item)
       if (p) products.push(p)
     }
-    stats.tick(items.length)
-    if ((skip / PAGE_SIZE) % 20 === 0) {
-      console.log(`  ${skip}/${total}`)
-    }
+    stats.tick(firstData.items?.length || 0)
     skip += PAGE_SIZE
-    await throttle.wait()
+
+    while (skip < total) {
+      const url = `${IGA_API}/${STORE_ID}/search?q=${q}&take=${PAGE_SIZE}&skip=${skip}&sort=brand`
+      const result = await fetchWithRetry(url)
+      if (!result.ok) break
+      if (result.elapsed) throttle.record(result.elapsed)
+      const data = await result.response.json()
+      const items = data.items || []
+      if (items.length === 0) break
+      for (const item of items) {
+        const p = parseProduct(item)
+        if (p) products.push(p)
+      }
+      stats.tick(items.length)
+      skip += PAGE_SIZE
+      await throttle.wait()
+    }
+    console.log(`  q=${q}: ${total} results (${products.length} total collected)`)
   }
   return products
 }
