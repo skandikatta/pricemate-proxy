@@ -1,0 +1,21 @@
+name: Scrape Chemist Warehouse
+on:
+  schedule:
+    - cron: '0 20 * * *'  # 6am AEST daily
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Scrape Chemist Warehouse
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: node scrape-chemistwarehouse.js
