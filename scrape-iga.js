@@ -44,11 +44,28 @@ function parseProduct(item) {
   }
 }
 
-async function scrapeCategory(categoryId, throttle, stats) {
+async function scrapeAll(throttle, stats) {
   const products = []
   let skip = 0
-  while (true) {
-    const url = `${IGA_API}/${STORE_ID}/search?q=*&take=${PAGE_SIZE}&skip=${skip}&f=Category:${encodeURIComponent(categoryId)}`
+  // First call to get total count
+  const firstUrl = `${IGA_API}/${STORE_ID}/search?q=*&take=${PAGE_SIZE}&skip=0&sort=brand`
+  const firstResult = await fetchWithRetry(firstUrl)
+  if (!firstResult.ok) throw new Error(`Initial fetch failed: ${firstResult.error}`)
+  const firstData = await firstResult.response.json()
+  const total = firstData.total || 0
+  console.log(`  Total products in store: ${total}`)
+  
+  // Process first page
+  for (const item of (firstData.items || [])) {
+    const p = parseProduct(item)
+    if (p) products.push(p)
+  }
+  stats.tick(firstData.items?.length || 0)
+  skip += PAGE_SIZE
+
+  // Paginate through all
+  while (skip < total) {
+    const url = `${IGA_API}/${STORE_ID}/search?q=*&take=${PAGE_SIZE}&skip=${skip}&sort=brand`
     const result = await fetchWithRetry(url)
     if (!result.ok) break
     if (result.elapsed) throttle.record(result.elapsed)
@@ -60,8 +77,10 @@ async function scrapeCategory(categoryId, throttle, stats) {
       if (p) products.push(p)
     }
     stats.tick(items.length)
+    if ((skip / PAGE_SIZE) % 20 === 0) {
+      console.log(`  ${skip}/${total}`)
+    }
     skip += PAGE_SIZE
-    if (skip >= (data.total || 0)) break
     await throttle.wait()
   }
   return products
@@ -86,49 +105,25 @@ async function main() {
     process.exitCode = 0; return
   }
 
-  // Get all leaf categories
-  console.log('Fetching category tree...')
-  const categories = await fetchCategoryTree()
-  console.log(`  ${categories.length} leaf categories`)
-
+  // Scrape all products via paginated search
+  console.log('Scraping all products...')
   const throttle = new AdaptiveThrottle({ minDelay: 100, maxDelay: 1500, targetConcurrency: 4 })
   const stats = new Stats('iga')
-  const progress = new Progress('iga')
-  let allProducts = [], allPrices = [], failedCategories = []
+  const allScraped = await scrapeAll(throttle, stats)
 
-  for (const cat of categories) {
-    if (progress.isCompleted(cat)) continue
-    process.stdout.write(`  ${cat}...`)
-    try {
-      const products = await scrapeCategory(cat, throttle, stats)
-      if (products.length === 0) { console.log(' 0'); continue }
-      for (const p of products) {
-        allProducts.push({ store: 'iga', product_id: p.product_id, name: p.name, brand: p.brand, size: p.size, category: p.category, image: p.image, barcode: p.barcode })
-        allPrices.push({ store: 'iga', product_id: p.product_id, price: p.price, was_price: p.was_price, is_on_special: p.is_on_special, cup_price: p.cup_price })
-      }
-      console.log(` ${products.length}`)
-      progress.markCompleted(cat)
-    } catch (e) {
-      console.log(` ERROR: ${e.message}`)
-      failedCategories.push(cat)
-    }
-  }
-
-  if (allProducts.length === 0) {
+  if (allScraped.length === 0) {
     console.warn('WARNING: Zero products scraped. API may have changed.')
     process.exitCode = 0; return
   }
 
-  // Dedupe (product can appear in multiple categories)
+  // Dedupe (shouldn't be needed with q=* but just in case)
   const seen = new Map()
-  for (const p of allProducts) seen.set(p.product_id, p)
-  const priceSeen = new Map()
-  for (const p of allPrices) priceSeen.set(p.product_id, p)
-  allProducts = [...seen.values()]
-  allPrices = [...priceSeen.values()]
+  for (const p of allScraped) seen.set(p.product_id, p)
+  const allProducts = [...seen.values()]
+  const allPrices = allProducts.map(p => ({ store: 'iga', product_id: p.product_id, price: p.price, was_price: p.was_price, is_on_special: p.is_on_special, cup_price: p.cup_price }))
 
   console.log(`\nTotal: ${allProducts.length} unique products`)
-  await upsertProducts(allProducts)
+  await upsertProducts(allProducts.map(p => ({ store: 'iga', product_id: p.product_id, name: p.name, brand: p.brand, size: p.size, category: p.category, image: p.image, barcode: p.barcode })))
   const changes = await insertPriceChanges(allPrices)
 
   if (allProducts.length < MIN_EXPECTED_PRODUCTS) {
@@ -136,11 +131,10 @@ async function main() {
   }
 
   console.log(`IGA done: ${allProducts.length} products, ${changes} price changes`)
-  const summary = { store: 'iga', total: allProducts.length, changes, failedCategories, completedAt: new Date().toISOString() }
+  const summary = { store: 'iga', total: allProducts.length, changes, completedAt: new Date().toISOString() }
   console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
   stats.print()
-  progress.clear()
-  return { total: allProducts.length, changes, failedCategories }
+  return { total: allProducts.length, changes }
 }
 
 console.log(`IGA scrape started: ${new Date().toISOString()}`)
