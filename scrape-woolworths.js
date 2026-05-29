@@ -7,7 +7,7 @@ const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
 // silent "0 products" failure mode in later departments.
 const COOKIE_TTL_MS = 30 * 60 * 1000
 const MIN_EXPECTED_PRODUCTS = 100
-const MAX_PAGES_PER_DEPT = 50
+const MAX_PAGES_PER_DEPT = 150
 
 // Curated department list. The display name (apiName) is the stable lookup key —
 // IDs rotate every few months; names rarely change. fallbackId is used if the
