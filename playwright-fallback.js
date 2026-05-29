@@ -52,8 +52,17 @@ async function getContext() {
   })
   if (!buildId) throw new Error('[pw] no buildId in homepage — stealth may be defeated')
 
+  // Set Melbourne store location so Coles returns real prices.
+  // Without this, pricing.now = 0 for most products (Coles withholds
+  // prices until a store is selected, even though they're nationally uniform).
+  // Store 7674 = Hawthorn East VIC 3123 (Coles' own default in __NEXT_DATA__).
+  await ctx.addCookies([
+    { name: 'fulfillmentStoreId', value: '7674', domain: '.coles.com.au', path: '/' },
+    { name: 'selectedDeliveryArea', value: '3123', domain: '.coles.com.au', path: '/' },
+  ])
+
   const cookieCount = (await ctx.cookies(COLES_BASE)).length
-  console.log(`  [pw] warmed up: buildId=${buildId.slice(0, 24)}..., ${cookieCount} cookies`)
+  console.log(`  [pw] warmed up: buildId=${buildId.slice(0, 24)}..., ${cookieCount} cookies (store=3000)`)
 
   _ctx = { browser, ctx, page, buildId }
   return _ctx
