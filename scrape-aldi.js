@@ -91,6 +91,23 @@ async function scrapeCategory(url, throttle, stats) {
 
 async function main() {
   console.log('=== ALDI (direct, HTML parsing) ===')
+
+  // Pre-flight: verify Aldi is reachable and extraction works
+  console.log('[preflight] Testing Aldi site...')
+  const testResult = await fetchWithRetry(`${ALDI_BASE}/products/dairy-eggs-fridge/k/960000000`)
+  if (testResult.ok) {
+    const html = await testResult.response.text()
+    const testProducts = extractProducts(html)
+    if (testProducts.length > 0) {
+      console.log(`[preflight] OK — ${testProducts.length} products extracted from test page`)
+    } else {
+      console.warn('[preflight] WARNING: 0 products extracted — HTML structure may have changed')
+      console.warn('[preflight] Continuing anyway — other categories may still work')
+    }
+  } else {
+    console.warn(`[preflight] Aldi returned ${testResult.error} — site may be down`)
+  }
+
   const categories = await discoverCategories()
 
   if (categories.length === 0) {
