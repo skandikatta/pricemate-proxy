@@ -72,11 +72,13 @@ async function main() {
   const testResult = await fetchWithRetry('https://www.chemistwarehouse.com.au/buy/91329/cerave-moisturising-cream-454g')
   if (testResult.ok) {
     const html = await testResult.response.text()
+    console.log(`[preflight] Page fetched: ${html.length} bytes`)
     const testProduct = extractProduct(html, 'https://www.chemistwarehouse.com.au/buy/91329/cerave-moisturising-cream-454g')
     if (testProduct && testProduct.price > 0) {
       console.log(`[preflight] OK — "${testProduct.name}" $${testProduct.price} (RRP $${testProduct.was_price || 'N/A'})`)
     } else {
       console.warn('[preflight] WARNING: Page loaded but extraction failed — HTML structure may have changed')
+      console.warn(`[preflight] extractProduct returned: ${JSON.stringify(testProduct)}`)
       console.warn('[preflight] Exiting gracefully — no DB writes.')
       process.exitCode = 0; return
     }
