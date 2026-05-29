@@ -65,6 +65,12 @@ async function resolveCategories() {
 async function scrapeColes() {
   console.log('=== COLES (via Render proxy) ===')
   const startedAt = Date.now()
+
+  // Pre-flight: verify the scrape path works before committing to a full run
+  const { preflight } = require('./coles-preflight')
+  const flightConfig = await preflight(PROXY)
+  console.log(`[preflight] Using path: ${flightConfig.path}, price field: ${flightConfig.priceField}`)
+
   const priorCatalogCount = await getStoreProductCount('coles').catch(() => null)
   const categories = await resolveCategories()
   let total = 0, changes = 0, failedCategories = []
