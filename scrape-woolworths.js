@@ -7,6 +7,7 @@ const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
 // silent "0 products" failure mode in later departments.
 const COOKIE_TTL_MS = 30 * 60 * 1000
 const MIN_EXPECTED_PRODUCTS = 100
+const MAX_PAGES_PER_DEPT = 50
 
 // Curated department list. The display name (apiName) is the stable lookup key —
 // IDs rotate every few months; names rarely change. fallbackId is used if the
@@ -101,7 +102,7 @@ async function scrapeWoolworths() {
         console.warn(`  [cookies refresh failed] ${e.message} — continuing with stale cookies`)
       }
     }
-    for (let page = 1; page <= 999; page++) {
+    for (let page = 1; page <= MAX_PAGES_PER_DEPT; page++) {
       const body = JSON.stringify({
         categoryId: dept.id, pageNumber: page, pageSize: 36, sortType: 'TraderRelevance',
         url: '/shop/browse/fruit-veg', location: '/shop/browse/fruit-veg',
@@ -134,7 +135,7 @@ async function scrapeWoolworths() {
 
         const prices = results.map(p => ({
           store: 'woolworths', product_id: String(p.Stockcode), price: p.Price || 0,
-          was_price: p.WasPrice || null, is_on_special: p.IsOnSpecial || false,
+          was_price: p.WasPrice || null, is_on_special: p.IsOnSpecial || false, cup_price: p.CupString || null,
         }))
 
         await upsertProducts(products)
