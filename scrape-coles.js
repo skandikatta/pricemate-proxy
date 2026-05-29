@@ -104,8 +104,13 @@ async function scrapeColes() {
             viaPlaywright = true
             usedPlaywright = true
           } else {
-            console.log(` ${fetched.error} mid-category, stopping`)
-            failedCategories.push(cat)
+            // 404 mid-pagination = end of category (normal). Only treat 5xx as failure.
+            if (fetched.status === 404) {
+              console.log(` 404 — end of category`)
+            } else {
+              console.log(` ${fetched.error} mid-category, stopping`)
+              failedCategories.push(cat)
+            }
             break
           }
         } else {
