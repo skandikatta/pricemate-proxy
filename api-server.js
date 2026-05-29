@@ -110,9 +110,52 @@ app.get('/api/price-history-v2', async (req, res) => {
   res.json(rows)
 })
 
+// Batch price history for sparklines — replaces the N+1 fan-out where the
+// frontend fires one /api/prices call per product card. Accepts up to 100
+// (store, product_id) pairs, returns last 20 prices per product keyed by
+// `${store}_${product_id}`. Frontend populates sessionStorage from this
+// single response, then PriceSparkline reads from cache (no individual fetch).
+app.post('/api/prices/batch', async (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items : null
+  if (!items || items.length === 0) return res.status(400).json({ error: 'items array required' })
+  if (items.length > 100) return res.status(400).json({ error: 'max 100 items per batch' })
+
+  const VALID = new Set(['coles', 'woolworths', 'aldi'])
+  for (const it of items) {
+    if (!it?.store || !VALID.has(it.store) || !it.productId) {
+      return res.status(400).json({ error: 'invalid item shape' })
+    }
+  }
+
+  const params = []
+  const pairs = items.map(it => {
+    params.push(it.store, it.productId)
+    return `($${params.length - 1}, $${params.length})`
+  }).join(',')
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT store, product_id, price::float AS price, scraped_at
+         FROM price_history
+        WHERE (store, product_id) IN (${pairs})
+          AND scraped_at > NOW() - INTERVAL '90 days'
+        ORDER BY store, product_id, scraped_at DESC`,
+      params
+    )
+    const grouped = {}
+    for (const r of rows) {
+      const k = `${r.store}_${r.product_id}`
+      if (!grouped[k]) grouped[k] = []
+      if (grouped[k].length < 20) grouped[k].push(r.price)
+    }
+    res.json(grouped)
+  } catch (e) {
+    console.error('[prices/batch]', e.message)
+    res.status(500).json({ error: 'query failed' })
+  }
+})
+
 // Parameterized — was string-interpolating user input straight into SQL,
-// classic injection vector (e.g. `?coles_id=' OR '1'='1` would exfiltrate
-// arbitrary rows). Fixed via $1 binding.
 app.get('/api/groups', async (req, res) => {
   const { coles_id, woolworths_id, aldi_id } = req.query
   let q, val
