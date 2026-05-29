@@ -310,3 +310,50 @@ return arbitrary rows from any table via `UNION SELECT`).
   each construct their own `new Pool()` instead of importing
   the existing `db.js` shared pool. Mechanical consolidation
   pass deferred.
+
+## 2026-05-30 — Ghost-alias sweep + v1 read filter (Fix A + Fix B)
+
+**Problem.** Diagnostic across all 3 stores showed v1 `products` has 1,606
+Woolies + 133 Coles ghosts (products whose last `price_history` row is >14d
+old). v2 `product_aliases.last_seen` shows 0 ghosts only because the column
+was backfilled 2026-05-28 — real drift starts surfacing ~2026-06-11. Both
+paths need treatment.
+
+**Fix A — v1 read filter (immediate UX).** Three edits to `api-server.js`:
+- `/api/products` (line 49): added `EXISTS (... price_history.scraped_at > NOW() - 14 days)` subquery — uses existing `(store, product_id, scraped_at)` index.
+- `/api/search-products` Path B LATERAL: added `scraped_at > NOW() - 14 days` inside the LATERAL → ghost products return null and are filtered by the existing `WHERE ph.price IS NOT NULL`.
+- (Already-safe paths: `/api/random-specials` and `/api/search-products` Path A already require `scraped_at >= NOW() - 7 days`. No change.)
+
+**Fix B — v2 sweep job (preventative).**
+- New `scripts/sweep-ghosts.js` — nightly `UPDATE product_aliases SET active = FALSE WHERE active = TRUE AND last_seen < CURRENT_DATE - 14`. Bounded write (only flips rows that change). Comeback path is automatic: `db.js:shadowUpsertProductsV2` already sets `active = TRUE` on every scrape bump.
+- New `.github/workflows/sweep-ghosts.yml` — cron `30 23 * * *` UTC (3.5h after Aldi finishes; all 3 stores have written their last_seen bumps by then).
+- Read filter on v2 endpoints: `/api/eligible-products` (line 170) and `/api/predictions-batch` (line 400) now require `pa.active = TRUE`.
+
+**Why this is NOT an Option C logic change.** The `last_seen` column, the
+shadow-write bump, and the `active` flag all pre-existed (migration 005 +
+`db.js:shadowUpsertProductsV2`). The sweep is operational hygiene; the read
+filters are query additions. No matcher thresholds, no schema, no shadow-write
+semantics touched. Explicitly authorised by Praveen 2026-05-30.
+
+**Verification queries.**
+
+```sql
+-- Fix A: v1 ghost count (rows still exist; just hidden from /api/products + /api/search-products)
+WITH latest AS (SELECT store, product_id, MAX(scraped_at) AS last_price
+                  FROM price_history GROUP BY store, product_id)
+SELECT p.store,
+       COUNT(*) FILTER (WHERE l.last_price < NOW() - INTERVAL '14 days'
+                          OR l.last_price IS NULL) AS ghosts_14d
+  FROM products p LEFT JOIN latest l USING (store, product_id)
+ GROUP BY p.store ORDER BY p.store;
+-- 2026-05-30 baseline: aldi 0, coles 133, woolworths 1606
+
+-- Fix B: post-sweep alias state (run morning after first sweep ~2026-06-12)
+SELECT store, COUNT(*) FILTER (WHERE active=TRUE)  AS active_n,
+              COUNT(*) FILTER (WHERE active=FALSE) AS inactive_n
+  FROM product_aliases GROUP BY store ORDER BY store;
+```
+
+**Rollback.**
+- Fix A: revert the 3 `api-server.js` edits, restart pricemate-api on VM.
+- Fix B: disable `.github/workflows/sweep-ghosts.yml` (toggle in GH UI). Existing flipped rows can be reactivated with `UPDATE product_aliases SET active = TRUE` — no data loss.

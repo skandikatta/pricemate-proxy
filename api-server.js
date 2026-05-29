@@ -46,7 +46,15 @@ app.use((req, res, next) => {
 const { pool } = require('./db')
 app.get('/api/products', async (req, res) => {
   const { store, name, product_id, limit = 100, offset = 0 } = req.query
-  let q = 'SELECT * FROM products WHERE 1=1'
+  // Ghost-exclusion (Fix A, 2026-05-30): hide products whose most recent
+  // price_history row is >14d old. Catches discontinued / renamed-away SKUs
+  // that still have a `products` row but have stopped getting scraped. EXISTS
+  // hits the (store, product_id, scraped_at) index — single index lookup.
+  let q = `SELECT * FROM products
+            WHERE EXISTS (SELECT 1 FROM price_history ph
+                           WHERE ph.store = products.store
+                             AND ph.product_id = products.product_id
+                             AND ph.scraped_at > NOW() - INTERVAL '14 days')`
   const params = []
   if (store) { params.push(store); q += ` AND store=$${params.length}` }
   if (name) { params.push(`%${name}%`); q += ` AND name ILIKE $${params.length}` }
@@ -168,6 +176,7 @@ app.get('/api/eligible-products', async (req, res) => {
            JOIN product_aliases pa
              ON ph.internal_id = pa.internal_id AND ph.store = pa.store
           WHERE ph.scraped_at >= NOW() - INTERVAL '180 days'
+            AND pa.active = TRUE -- Fix B (2026-05-30): exclude swept ghosts
             ${storeFilter}
           GROUP BY pa.store, pa.vendor_id
          HAVING COUNT(*) >= $1
@@ -330,6 +339,7 @@ app.get('/api/search-products', async (req, res) => {
                SELECT price, was_price, is_on_special, cup_price, scraped_at
                  FROM price_history
                 WHERE store = m.store AND product_id = m.product_id
+                  AND scraped_at > NOW() - INTERVAL '14 days'
                 ORDER BY scraped_at DESC
                 LIMIT 1
              ) ph ON true
@@ -398,6 +408,7 @@ app.post('/api/predictions-batch', async (req, res) => {
          JOIN price_history_v2 ph
            ON ph.internal_id = pa.internal_id AND ph.store = pa.store
         WHERE (pa.store, pa.vendor_id) IN (${pairs})
+          AND pa.active = TRUE -- Fix B (2026-05-30): exclude swept ghosts
           AND ph.scraped_at >= NOW() - INTERVAL '180 days'
         ORDER BY pa.store, pa.vendor_id, ph.scraped_at ASC`,
       params

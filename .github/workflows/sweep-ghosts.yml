@@ -1,0 +1,37 @@
+name: Sweep ghost aliases
+
+# Runs after all three daily scrapes have written their last_seen bumps.
+# 23:30 UTC = ~3.5h after Aldi cron (20:00 UTC) and well after Woolies/Coles.
+# By then every alias the retailers still serve has had its last_seen bumped
+# to CURRENT_DATE today; whatever is left >14 days old is a real ghost.
+#
+# Flips product_aliases.active = FALSE for those. Read paths that filter on
+# active = TRUE (api-server.js /api/eligible-products, /api/predictions-batch)
+# stop returning them. If a SKU comes back, the next scrape bumps it active
+# again via db.js:shadowUpsertProductsV2.
+
+on:
+  schedule:
+    - cron: "30 23 * * *"
+  workflow_dispatch:
+    inputs:
+      ghost_days:
+        description: "Override GHOST_DAYS (default 14)"
+        required: false
+        default: "14"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install pg
+      - run: node scripts/sweep-ghosts.js
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          GHOST_DAYS: ${{ github.event.inputs.ghost_days || '14' }}
