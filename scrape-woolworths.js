@@ -68,12 +68,32 @@ async function resolveDepartments() {
 
 async function scrapeWoolworths() {
   console.log('=== WOOLWORTHS (direct) ===')
-  const cookies = await getWoolworthsCookies()
-  if (!cookies) {
+
+  // Pre-flight: verify API is reachable and returning prices
+  console.log('[preflight] Testing Woolworths API...')
+  const testCookies = await getWoolworthsCookies()
+  if (!testCookies) {
     console.warn('WARNING: Failed to get cookies — Woolworths may have changed auth.')
     console.warn('Exiting gracefully — existing DB data preserved.')
     return
   }
+  const testBody = JSON.stringify({ categoryId: '1-E5BEE36E', pageNumber: 1, pageSize: 36, sortType: 'TraderRelevance', url: '/shop/browse/fruit-veg', location: '/shop/browse/fruit-veg', formatObject: '{"name":"Category"}', isSpecial: false, isBundle: false, isMobile: false, filters: [], token: '', gpBoost: 0, isHideUnavailableProducts: false, isRegisteredRewardCardPromotion: false, enableAdReRanking: false, groupEdmVariants: true, categoryVersion: 'v2' })
+  const testResult = await fetchWithRetry(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
+    method: 'POST', headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Cookie': testCookies }, body: testBody
+  })
+  if (testResult.ok) {
+    const testData = await testResult.response.json()
+    const testProducts = (testData.Bundles || []).flatMap(b => b.Products || [])
+    const withPrice = testProducts.filter(p => p.Price > 0)
+    console.log(`[preflight] OK — ${testProducts.length} products, ${withPrice.length} with price`)
+    if (testProducts.length > 0 && withPrice.length === 0) {
+      console.warn('[preflight] WARNING: All prices are $0 — datacenter IP may be getting restricted data')
+    }
+  } else {
+    console.warn(`[preflight] API returned ${testResult.error} — proceeding anyway (may degrade)`)
+  }
+
+  const cookies = testCookies
   console.log('Cookies obtained ✓')
 
   const priorCatalogCount = await getStoreProductCount('woolworths').catch(() => null)

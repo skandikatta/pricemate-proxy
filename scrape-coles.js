@@ -154,7 +154,7 @@ async function scrapeColes() {
 
       const prices = results.map(p => {
         const pr = p.pricing || {}
-        return { store: 'coles', product_id: String(p.id), price: pr.now || 0, was_price: pr.was || null, is_on_special: pr.onlineSpecial || false }
+        return { store: 'coles', product_id: String(p.id), price: pr.now || 0, was_price: pr.was || null, is_on_special: pr.onlineSpecial || false, cup_price: pr.comparable || null }
       })
 
       await upsertProducts(products)
