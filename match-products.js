@@ -397,13 +397,20 @@ function matchLayer3(products, existingMatched) {
       } else if (cb && wb && cb === wb) {
         bothStoreBrand = storeBrands.has(cb)
       }
-      // For Coles ↔ Woolworths store-brand matches we relax the token threshold
-      // because the brand-name tokens differ ("australian ... milk" vs
-      // "woolworths ... milk uht") and drag the sort-ratio down even though the
-      // product is the same. Veto already guarantees both sides are store brands.
+      // For Coles ↔ Woolworths store-brand matches, compare core names (brand
+      // stripped) using tokenOverlap — more forgiving of word-order differences
+      // and extra qualifiers like "Australian" or "UHT" that one side adds.
+      // variantsMatch still guards against flavour/type mismatches.
       if (!variantsMatch(cp.name, wp.name)) continue
-      const threshold = bothStoreBrand ? 0.65 : 0.80
-      if (tokenSortRatio(cp.normalized, wp.normalized) >= threshold) {
+      let isMatch = false
+      if (bothStoreBrand) {
+        // Store-brand path: use tokenOverlap on core (brand-stripped) names
+        isMatch = tokenOverlap(cp.core, wp.core) >= 0.75 && cp.core.length > 3
+      } else {
+        // Named-brand path: stricter tokenSortRatio on full normalized name
+        isMatch = tokenSortRatio(cp.normalized, wp.normalized) >= 0.80
+      }
+      if (isMatch) {
         groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
         matched.add(`woolworths_${wp.product_id}`)
