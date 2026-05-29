@@ -357,3 +357,18 @@ SELECT store, COUNT(*) FILTER (WHERE active=TRUE)  AS active_n,
 **Rollback.**
 - Fix A: revert the 3 `api-server.js` edits, restart pricemate-api on VM.
 - Fix B: disable `.github/workflows/sweep-ghosts.yml` (toggle in GH UI). Existing flipped rows can be reactivated with `UPDATE product_aliases SET active = TRUE` — no data loss.
+
+## 2026-05-30 — Prediction-quality baseline (run via scripts/prediction-quality.sql)
+
+Catalog history depth in `price_history_v2` over last 180 days:
+
+| Store | Total | >=30d | 14-29d | 7-13d | 3-6d | <3d | % >=7d |
+|---|---|---|---|---|---|---|---|
+| Aldi | 2,845 | 104 | 59 | 5 | 6 | 2,671 | 5.9% |
+| Coles | 22,962 | 984 | 152 | 64 | 59 | 21,703 | 5.2% |
+| Woolworths | 53,278 | 1,251 | 760 | 221 | 391 | 50,655 | 4.2% |
+
+**Moat = 2,339 products** in the deep tier (>=30d) across all stores. ~95% of
+the catalog has <7 days — confirms data depth is the bottleneck for any
+model upgrade (TimesFM, survival analysis, etc.). Re-run this query weekly
+to track whether the moat is growing.
