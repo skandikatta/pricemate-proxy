@@ -15,21 +15,47 @@ Scrapes all Woolworths Australia departments daily. Uses their internal browse A
 ## Data Flow
 
 ```
-GitHub Actions (cron 18:30 UTC)
+GitHub Actions (cron 18:30 UTC) — 4 parallel jobs
     │
+    ├─ Group 1: household (1584 pages, ~92 min)
+    ├─ Group 2: pet + pantry (790 pages, ~46 min)
+    ├─ Group 3: health-beauty + baby (595 pages, ~35 min)
+    └─ Group 4: fruit-veg, bakery, meat, dairy, frozen, drinks, front-of-store (152 pages, ~9 min)
+    │
+    Each group independently:
     ▼ Pre-flight (test 1 page, verify cookies + prices)
-    │
-    ▼ Get cookies (one GET to /shop/browse/fruit-veg, extract Set-Cookie)
-    │
+    ▼ Get cookies (own session per group — no conflicts)
     ▼ Discover departments (PiesCategoriesWithSpecials API)
-    │
-    ▼ For each department (12 total):
-    │   ├─ POST /apis/ui/browse/category (page 1, 2, 3... up to 150)
+    ▼ Filter to assigned group's departments
+    ▼ For each department:
+    │   ├─ POST /apis/ui/browse/category (page 1, 2, 3... up to 1600)
     │   ├─ Refresh cookies every 30 min (session TTL ~60 min)
     │   └─ Stop when: empty response, <10 products (filler), or cap hit
-    │
     ▼ Products + prices → db.js → v1 + v2 shadow write
 ```
+
+## Parallel Pipeline Architecture
+
+Split into 4 groups balanced by page count, running as parallel GitHub Actions jobs:
+
+| Group | Departments | Pages | Est. time | Timeout |
+|-------|-------------|-------|-----------|---------|
+| 1 | household | 1,584 | ~92 min | 120 min |
+| 2 | pet, pantry | 790 | ~46 min | 90 min |
+| 3 | health-beauty, baby | 595 | ~35 min | 60 min |
+| 4 | fruit-veg, bakery, meat, dairy, frozen, drinks, front-of-store | 152 | ~9 min | 30 min |
+
+**Total wall time:** ~92 min (limited by Group 1) vs ~185 min sequential.
+
+Each group:
+- Gets its own GitHub Actions runner
+- Gets its own cookie session (no conflicts)
+- Has its own timeout (sized to the group)
+- Writes to the same DB (different product_ids, no conflicts)
+- Reports its own SCRAPE_SUMMARY
+- Can't block other groups — if one fails, others still complete
+
+Controlled by `WOOLWORTHS_GROUP` env var. Unset = all departments (backward compatible for manual runs).
 
 ## Authentication
 
@@ -68,7 +94,8 @@ Runs at scrape start (built into the pipeline, not a separate workflow):
 
 - **Direct API access** — no proxy needed (unlike Coles). Woolworths doesn't use Imperva on their browse API.
 - **Cookie refresh every 30 min** — prevents silent auth expiry on long runs.
-- **Pagination cap: 150 pages** — Woolworths departments have up to 100+ pages (36 items/page). Cap prevents infinite loops if pagination detection breaks.
+- **Pagination cap: 1600 pages** — Woolworths' largest department (household) has 1,584 pages. Cap prevents infinite loops if pagination detection breaks.
+- **Parallel groups** — 4 jobs run simultaneously, each with own cookie session. Cuts wall time from 3h to ~90min.
 - **`< 10 products` = end of category** — Woolworths returns filler/duplicate products on the last page. Fewer than 10 means we've exhausted the real results.
 - **Barcode extraction** — Woolworths provides `p.Barcode` which strengthens cross-store matching in v2.
 - **cup_price extraction** — `p.CupString` (e.g. "$1.75 per 100g") saved to price_history.
@@ -120,8 +147,8 @@ Cookie: <session cookies>
 - `SCRAPE_SUMMARY` JSON in GitHub Actions logs
 - Key fields: `total`, `changes`, `failedDepts`, `degraded`, `priorCatalogCount`
 - `STATS` line: requests, req/sec, items, errors
-- Expected: ~53,000 products, 100-500 changes/day, 45-60 min runtime
-- Degradation threshold: < 70% of prior catalog count
+- Expected: ~114,000 products across 4 groups, 100-500 changes/day, ~92 min wall time
+- Degradation threshold: < 70% of prior catalog count (per group)
 
 ## DB Tables (Woolworths data)
 
@@ -138,8 +165,9 @@ Cookie: <session cookies>
 
 | Date | Issue | Resolution |
 |------|-------|------------|
-| 2026-05-29 | Pagination cap (50) too low — 7 depts hit it, lost 35K products | Raised to 150 (`055fd45`) |
-| 2026-05-29 | `front-of-store` got 401 at 27 min mark | Cookie refresh at 30 min should catch it; non-critical dept |
+| 2026-05-29 | Pagination cap (50) too low — 7 depts hit it, lost 35K products | Raised to 1600 (`179ddd3`) |
+| 2026-05-29 | Sequential scrape took 185 min for full catalog | Split into 4 parallel groups (`6517d40`) — wall time ~92 min |
+| 2026-05-29 | `front-of-store` got 401 at 27 min mark | Cookie refresh at 30 min handles it; non-critical dept |
 | 2026-05-29 | Pre-flight + cup_price + adaptive throttle added | `663d43b` |
 
 ## Comparison to Coles/Aldi
@@ -152,4 +180,5 @@ Cookie: <session cookies>
 | Barcode available | ✅ | ❌ | ❌ |
 | Fallback layers | 1 (cookie refresh) | 4 (Render→direct→Playwright→HTML) | 4 strategies |
 | Typical runtime | 45-60 min | 10-34 min | 3-5 min |
-| Products | ~53,000 | ~33,000 | ~2,700 |
+| Products | ~114,000 | ~33,000 | ~2,700 |
+| Parallel jobs | 4 groups | 1 | 1 |
