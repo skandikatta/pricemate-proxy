@@ -1,38 +1,11 @@
 const { upsertProducts, insertPriceChanges, close, getStoreProductCount } = require('./db')
+const { AdaptiveThrottle, fetchWithRetry, Progress, Stats, sleep, UA } = require('./scrape-utils')
 const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
-
-// Retry on 5xx and network blips. Mirrors scrape-coles.js fetchWithRetry —
-// without this a single transient failure killed an entire department
-// (~10-15min of scrape lost).
-const MAX_PAGE_ATTEMPTS = 3
-async function fetchWithRetry(url, opts, label) {
-  let lastErr = null
-  for (let attempt = 1; attempt <= MAX_PAGE_ATTEMPTS; attempt++) {
-    try {
-      const r = await fetch(url, opts)
-      if (r.ok) return { ok: true, response: r }
-      if (r.status >= 500 && attempt < MAX_PAGE_ATTEMPTS) {
-        lastErr = `HTTP ${r.status}`
-        await new Promise(s => setTimeout(s, 1000 * Math.pow(2, attempt - 1)))
-        continue
-      }
-      return { ok: false, status: r.status, error: `HTTP ${r.status}` }
-    } catch (e) {
-      lastErr = e.message
-      if (attempt < MAX_PAGE_ATTEMPTS) {
-        await new Promise(s => setTimeout(s, 1000 * Math.pow(2, attempt - 1)))
-        continue
-      }
-    }
-  }
-  return { ok: false, error: lastErr || 'unknown' }
-}
 
 // Cookie refresh interval. Woolies session cookies appear to be ~60min TTL
 // based on observation; refreshing every 30min mid-scrape prevents the
 // silent "0 products" failure mode in later departments.
 const COOKIE_TTL_MS = 30 * 60 * 1000
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
 const MIN_EXPECTED_PRODUCTS = 100
 
 // Curated department list. The display name (apiName) is the stable lookup key —
@@ -105,10 +78,14 @@ async function scrapeWoolworths() {
   const priorCatalogCount = await getStoreProductCount('woolworths').catch(() => null)
   const departments = await resolveDepartments()
   let total = 0, changes = 0, failedDepts = []
+  const throttle = new AdaptiveThrottle({ minDelay: 100, maxDelay: 2000, targetConcurrency: 4 })
+  const stats = new Stats('woolworths')
+  const progress = new Progress('woolworths')
   let cookiesFetchedAt = Date.now()
   let activeCookies = cookies
 
   for (const dept of departments) {
+    if (progress.isCompleted(dept.name)) { continue }
     // Refresh cookies if older than COOKIE_TTL_MS. Long scrapes (~1h43m total)
     // outlive Woolies' session — without this, later departments silently
     // returned 0 products.
@@ -137,9 +114,9 @@ async function scrapeWoolworths() {
       try {
         const fetched = await fetchWithRetry(`${WOOLWORTHS_BASE}/apis/ui/browse/category`, {
           method: 'POST',
-          headers: { 'User-Agent': UA, 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': activeCookies },
+          headers: { 'Accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json', 'Cookie': activeCookies },
           body
-        }, `${dept.name} p${page}`)
+        })
         if (!fetched.ok) { console.log(` ${fetched.error}, stopping`); break }
         const r = fetched.response
         const data = await r.json()
@@ -165,13 +142,16 @@ async function scrapeWoolworths() {
         changes += changed
         total += products.length
         console.log(` ${results.length} products (${changed} changes)`)
-        await sleep(100)
+        stats.tick(products.length)
+        await throttle.wait()
       } catch (e) {
         console.log(` ERROR: ${e.message}`)
+        stats.error()
         failedDepts.push(dept.name)
         break
       }
     }
+    progress.markCompleted(dept.name)
   }
 
   if (failedDepts.length > 0) console.warn(`WARNING: Failed departments: ${failedDepts.join(', ')}`)
@@ -197,11 +177,12 @@ async function scrapeWoolworths() {
     completedAt: new Date().toISOString(),
   }
   console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
+  stats.print()
+  progress.clear()
 
   return { total, changes, failedDepts, degraded }
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 console.log(`Woolworths scrape started: ${new Date().toISOString()}`)
 scrapeWoolworths()

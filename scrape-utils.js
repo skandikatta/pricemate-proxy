@@ -39,7 +39,7 @@ class AdaptiveThrottle {
 
 // --- Retry with backoff ---
 // Like Scrapy's RetryMiddleware: retries on 5xx/network errors, fails fast on 4xx.
-async function fetchWithRetry(url, { retries = 3, timeoutMs = 15000, headers = {} } = {}) {
+async function fetchWithRetry(url, { retries = 3, timeoutMs = 15000, headers = {}, ...fetchOpts } = {}) {
   let lastErr = null
   for (let attempt = 1; attempt <= retries; attempt++) {
     const start = Date.now()
@@ -47,6 +47,7 @@ async function fetchWithRetry(url, { retries = 3, timeoutMs = 15000, headers = {
       const r = await fetch(url, {
         headers: { 'User-Agent': UA, ...headers },
         signal: AbortSignal.timeout(timeoutMs),
+        ...fetchOpts,
       })
       const elapsed = Date.now() - start
       if (r.ok) return { ok: true, response: r, elapsed }

@@ -1,4 +1,5 @@
 const { upsertProducts, insertPriceChanges, close, getStoreProductCount } = require('./db')
+const { AdaptiveThrottle, fetchWithRetry, Progress, Stats, sleep, UA } = require('./scrape-utils')
 const PROXY = process.env.PROXY_URL || 'https://pricemate-proxy.onrender.com'
 const MIN_EXPECTED_PRODUCTS = 100
 const DEGRADATION_THRESHOLD = 0.70 // alert if today's total < 70% of prior catalog size
@@ -10,33 +11,6 @@ let playwrightFallback = null
 function getPlaywrightFallback() {
   if (!playwrightFallback) playwrightFallback = require('./playwright-fallback')
   return playwrightFallback
-}
-
-// Retry policy for per-page fetches. Imperva blips, Render cold starts, and
-// transient 5xx are common; one bad page shouldn't burn the whole category.
-const MAX_PAGE_ATTEMPTS = 3
-async function fetchWithRetry(url, label) {
-  let lastErr = null
-  for (let attempt = 1; attempt <= MAX_PAGE_ATTEMPTS; attempt++) {
-    try {
-      const r = await fetch(url)
-      if (r.ok) return { ok: true, response: r }
-      // Retry 5xx, fail-fast 4xx.
-      if (r.status >= 500 && attempt < MAX_PAGE_ATTEMPTS) {
-        lastErr = `HTTP ${r.status}`
-        await sleep(1000 * Math.pow(2, attempt - 1))
-        continue
-      }
-      return { ok: false, status: r.status, error: `HTTP ${r.status}` }
-    } catch (e) {
-      lastErr = e.message
-      if (attempt < MAX_PAGE_ATTEMPTS) {
-        await sleep(1000 * Math.pow(2, attempt - 1))
-        continue
-      }
-    }
-  }
-  return { ok: false, error: lastErr || 'unknown' }
 }
 
 // Curated category list. The display title (apiTitle) is the stable lookup key
@@ -94,10 +68,14 @@ async function scrapeColes() {
   const priorCatalogCount = await getStoreProductCount('coles').catch(() => null)
   const categories = await resolveCategories()
   let total = 0, changes = 0, failedCategories = []
+  const throttle = new AdaptiveThrottle({ minDelay: 200, maxDelay: 2000, targetConcurrency: 4 })
+  const stats = new Stats('coles')
+  const progress = new Progress('coles')
 
   let usedPlaywright = false
 
   for (const cat of categories) {
+    if (progress.isCompleted(cat)) { continue }
     // Render is primary (4× faster); Playwright kicks in only when Render
     // returns errors. Once we switch a category to Playwright we stay on
     // Playwright for that category — don't flip back mid-pagination.
@@ -177,9 +155,11 @@ async function scrapeColes() {
       const changed = await insertPriceChanges(prices)
       changes += changed
       total += products.length
+      stats.tick(products.length)
       console.log(` ${results.length} products (${changed} changes)`)
-      await sleep(500)
+      await throttle.wait()
     }
+    progress.markCompleted(cat)
   }
 
   // Tear down Playwright if we used it (browser process + Chromium = memory).
@@ -224,11 +204,12 @@ async function scrapeColes() {
     used_playwright_fallback: usedPlaywright,
   }
   console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
+  stats.print()
+  progress.clear()
 
   return { total, changes, failedCategories, degraded }
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 console.log(`Coles scrape started: ${new Date().toISOString()}`)
 scrapeColes()

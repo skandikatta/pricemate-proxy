@@ -13,3 +13,4 @@ backups/
 hagglers-data*.json
 ingest-hagglers-audit-*.json
 backfill-audit-*.json
+.scrape-progress-*.json

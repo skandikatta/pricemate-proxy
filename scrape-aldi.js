@@ -1,41 +1,13 @@
 const { upsertProducts, insertPriceChanges, close } = require('./db')
 const { extractProducts } = require('./extract-aldi')
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0'
+const { AdaptiveThrottle, fetchWithRetry, fetchConcurrent, Progress, Stats, sleep, UA } = require('./scrape-utils')
 const ALDI_BASE = 'https://www.aldi.com.au'
 
 // Minimum products we expect — if below this, site likely changed
 const MIN_EXPECTED_PRODUCTS = 50
 
-// Per-request timeout. Aldi categories rarely take >5s; slow responses
-// shouldn't hang forever (GH Actions 30-min cap is too coarse a net).
-const REQUEST_TIMEOUT_MS = 15000
-
-// Pagination safety guard. Real Aldi categories top out ~10-15 pages —
-// if we loop past this, pagination detection has misfired.
+// Pagination safety guard. Real Aldi categories top out ~10-15 pages.
 const MAX_PAGES_PER_CATEGORY = 100
-
-// Retry on transient errors. Mirrors scrape-coles.js / scrape-woolworths.js.
-// 5xx + network errors retry with exp backoff; 4xx returns immediately.
-async function fetchWithRetry(url, { headers = {}, retries = 3 } = {}) {
-  let lastErr = null
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const res = await fetch(url, {
-        headers,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      })
-      if (res.ok) return res
-      if (res.status >= 400 && res.status < 500) return res
-      lastErr = new Error(`HTTP ${res.status}`)
-    } catch (e) {
-      lastErr = e
-    }
-    if (attempt < retries - 1) {
-      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
-    }
-  }
-  throw lastErr || new Error('fetchWithRetry exhausted')
-}
 
 // Hardcoded top-level category IDs (discovered May 2026)
 // These are stable — Aldi rarely changes category structure
@@ -61,9 +33,9 @@ const TOP_LEVEL_CATEGORIES = {
 async function discoverCategories() {
   // Try dynamic discovery first (resilient to ID changes)
   try {
-    const res = await fetchWithRetry(`${ALDI_BASE}/products`, { headers: { 'User-Agent': UA } })
-    if (res.ok) {
-      const html = await res.text()
+    const result = await fetchWithRetry(`${ALDI_BASE}/products`)
+    if (result.ok) {
+      const html = await result.response.text()
       const matches = [...html.matchAll(/href="\/products\/([^"]+)\/k\/(\d+)"/g)]
       const seen = new Set()
       const discovered = []
@@ -95,29 +67,21 @@ async function discoverCategories() {
   }))
 }
 
-async function scrapeCategory(url) {
+async function scrapeCategory(url, throttle, stats) {
   let allProducts = [], page = 1
   while (page <= MAX_PAGES_PER_CATEGORY) {
     const pageUrl = `${ALDI_BASE}${url}${page > 1 ? '?page=' + page : ''}`
-    let res
-    try {
-      res = await fetchWithRetry(pageUrl, { headers: { 'User-Agent': UA } })
-    } catch (e) {
-      // All retries exhausted on this page. Keep what we got from earlier pages.
-      console.warn(`    [retry-exhausted] ${pageUrl} → ${e.message}`)
-      break
-    }
-    if (!res.ok) break
-    const html = await res.text()
-    // Aldi sends a meta-refresh redirect when you page past the last result.
-    // Belt-and-braces: the products.length === 0 check below catches the same case
-    // if Aldi ever switches to a JS or 302 redirect.
+    const result = await fetchWithRetry(pageUrl)
+    if (!result.ok) break
+    if (result.elapsed) throttle.record(result.elapsed)
+    const html = await result.response.text()
+    stats.tick(0, html.length)
     if (html.includes('http-equiv="refresh"')) break
     const products = extractProducts(html)
     if (products.length === 0) break
     allProducts.push(...products)
     page++
-    await new Promise(r => setTimeout(r, 500))
+    await throttle.wait()
   }
   if (page > MAX_PAGES_PER_CATEGORY) {
     console.warn(`    [page-cap] hit ${MAX_PAGES_PER_CATEGORY}-page safety cap on ${url} — pagination terminator may have changed`)
@@ -139,10 +103,18 @@ async function main() {
   console.log(`Found ${categories.length} categories\n`)
 
   let allProducts = [], allPrices = [], failedCategories = []
+  const throttle = new AdaptiveThrottle({ minDelay: 300, maxDelay: 2000, targetConcurrency: 2 })
+  const stats = new Stats('aldi')
+  const progress = new Progress('aldi')
+
   for (const cat of categories) {
+    if (progress.isCompleted(cat.name)) {
+      console.log(`  ${cat.name}... skipped (resumed)`)
+      continue
+    }
     process.stdout.write(`  ${cat.name}...`)
     try {
-      const products = await scrapeCategory(cat.url)
+      const products = await scrapeCategory(cat.url, throttle, stats)
       if (products.length === 0) {
         console.log(' 0 (may have changed)')
         failedCategories.push(cat.name)
@@ -153,11 +125,13 @@ async function main() {
         allPrices.push({ store: 'aldi', product_id: p.productId, price: p.price, was_price: p.wasPrice || null, is_on_special: !!p.isOnSpecial, cup_price: p.cupPrice || null })
       }
       console.log(` ${products.length}`)
+      progress.markCompleted(cat.name)
     } catch (e) {
       console.log(` ERROR: ${e.message}`)
+      stats.error()
       failedCategories.push(cat.name)
     }
-    await new Promise(r => setTimeout(r, 500))
+    await throttle.wait()
   }
 
   // --- Graceful degradation ---
@@ -210,6 +184,8 @@ async function main() {
     completedAt: new Date().toISOString(),
   }
   console.log('SCRAPE_SUMMARY ' + JSON.stringify(summary))
+  stats.print()
+  progress.clear()
 
   return { total: allProducts.length, changes, failedCategories }
 }
