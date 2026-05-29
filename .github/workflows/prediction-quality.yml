@@ -1,0 +1,45 @@
+name: Prediction Quality Check
+on:
+  schedule:
+    - cron: '0 10 * * 1'  # Every Monday 10:00 UTC (8pm AEST)
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check prediction depth
+        env:
+          PGHOST: ${{ secrets.DB_HOST }}
+          PGDATABASE: pricemate
+          PGUSER: pricemate
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          MOAT=$(psql -t -A -c "
+            SELECT COUNT(DISTINCT internal_id)
+            FROM price_history_v2
+            WHERE scraped_at >= NOW() - INTERVAL '60 days'
+            GROUP BY internal_id
+            HAVING COUNT(*) >= 7
+          " | wc -l)
+          echo "Moat products (≥7 points in 60d): $MOAT"
+          if [ "$MOAT" -lt 2000 ]; then
+            echo "::error::Moat shrinking! Only $MOAT products have ≥7 data points (expected 2000+)"
+            exit 1
+          fi
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          curl -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "from": "cheapasmate <alerts@cheapasmate.com>",
+              "to": ["hello@cheapasmate.com"],
+              "subject": "⚠️ Prediction quality degraded",
+              "text": "Weekly check: moat products dropped below 2000. Check scrapers + ghost sweep."
+            }'
