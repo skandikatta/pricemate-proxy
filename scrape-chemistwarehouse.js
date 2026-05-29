@@ -67,10 +67,29 @@ function extractProduct(html, url) {
 async function main() {
   console.log('=== CHEMIST WAREHOUSE (sitemap + __NEXT_DATA__) ===')
 
+  // Pre-flight: verify site is reachable and extraction works
+  console.log('[preflight] Testing Chemist Warehouse...')
+  const testResult = await fetchWithRetry('https://www.chemistwarehouse.com.au/buy/91329/cerave-moisturising-cream-454g')
+  if (testResult.ok) {
+    const html = await testResult.response.text()
+    const testProduct = extractProduct(html, 'https://www.chemistwarehouse.com.au/buy/91329/cerave-moisturising-cream-454g')
+    if (testProduct && testProduct.price > 0) {
+      console.log(`[preflight] OK — "${testProduct.name}" $${testProduct.price} (RRP $${testProduct.was_price || 'N/A'})`)
+    } else {
+      console.warn('[preflight] WARNING: Page loaded but extraction failed — HTML structure may have changed')
+      console.warn('[preflight] Exiting gracefully — no DB writes.')
+      process.exitCode = 0; return
+    }
+  } else {
+    console.warn(`[preflight] Site returned ${testResult.error} — may be down`)
+    console.warn('[preflight] Exiting gracefully — existing DB data preserved.')
+    process.exitCode = 0; return
+  }
+
   const urls = await fetchSitemap()
   if (urls.length < MIN_EXPECTED_PRODUCTS) {
     console.warn(`WARNING: Only ${urls.length} URLs in sitemap (expected ${MIN_EXPECTED_PRODUCTS}+)`)
-    if (urls.length === 0) { process.exitCode = 0; return }
+    if (urls.length === 0) { console.warn('Exiting — sitemap empty.'); process.exitCode = 0; return }
   }
 
   const throttle = new AdaptiveThrottle({ minDelay: 100, maxDelay: 1500, targetConcurrency: 6 })
@@ -116,6 +135,17 @@ async function main() {
   }
 
   const total = stats.summary().items
+  
+  // Graceful degradation
+  if (total === 0) {
+    console.warn('WARNING: Zero products scraped. Site may have changed.')
+    console.warn('Existing DB data preserved.')
+    process.exitCode = 0; return { total: 0, failed }
+  }
+  if (total < MIN_EXPECTED_PRODUCTS) {
+    console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+). Extraction may be broken.`)
+  }
+
   console.log(`\nChemist Warehouse done: ${total} products, ${failed} failed`)
 
   const summary = { store: 'chemistwarehouse', total, failed, completedAt: new Date().toISOString() }
