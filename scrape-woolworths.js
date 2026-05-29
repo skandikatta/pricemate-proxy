@@ -13,19 +13,23 @@ const MAX_PAGES_PER_DEPT = 1600
 // IDs rotate every few months; names rarely change. fallbackId is used if the
 // PiesCategoriesWithSpecials endpoint is unreachable or doesn't list this dept.
 const DEPARTMENTS = [
-  { name: 'fruit-veg',         apiName: 'Fruit & Veg',              fallbackId: '1-E5BEE36E' },
-  { name: 'bakery',            apiName: 'Bakery',                   fallbackId: '1_DEB537E'  },
-  { name: 'meat-seafood-deli', apiName: 'Poultry, Meat & Seafood',  fallbackId: '1_D5A2236'  },
-  { name: 'dairy-eggs-fridge', apiName: 'Dairy, Eggs & Fridge',     fallbackId: '1_6E4F4E4'  },
-  { name: 'pantry',            apiName: 'Pantry',                   fallbackId: '1_39FD49C'  },
-  { name: 'frozen',            apiName: 'Freezer',                  fallbackId: '1_ACA2FC2'  },
-  { name: 'drinks',            apiName: 'Drinks',                   fallbackId: '1_5AF3A0A'  },
-  { name: 'health-beauty',     apiName: 'Personal Care',            fallbackId: '1_894D0A8'  },
-  { name: 'household',         apiName: 'Cleaning & Maintenance',   fallbackId: '1_2432B58'  },
-  { name: 'baby',              apiName: 'Baby',                     fallbackId: '1_717A94B'  },
-  { name: 'pet',               apiName: 'Pet',                      fallbackId: '1_61D6FEB'  },
-  { name: 'front-of-store',    apiName: 'Front of Store',           fallbackId: '1_B63CF9E'  },
+  { name: 'fruit-veg',         apiName: 'Fruit & Veg',              fallbackId: '1-E5BEE36E', group: 4 },
+  { name: 'bakery',            apiName: 'Bakery',                   fallbackId: '1_DEB537E',  group: 4 },
+  { name: 'meat-seafood-deli', apiName: 'Poultry, Meat & Seafood',  fallbackId: '1_D5A2236',  group: 4 },
+  { name: 'dairy-eggs-fridge', apiName: 'Dairy, Eggs & Fridge',     fallbackId: '1_6E4F4E4',  group: 4 },
+  { name: 'pantry',            apiName: 'Pantry',                   fallbackId: '1_39FD49C',  group: 2 },
+  { name: 'frozen',            apiName: 'Freezer',                  fallbackId: '1_ACA2FC2',  group: 4 },
+  { name: 'drinks',            apiName: 'Drinks',                   fallbackId: '1_5AF3A0A',  group: 4 },
+  { name: 'health-beauty',     apiName: 'Personal Care',            fallbackId: '1_894D0A8',  group: 3 },
+  { name: 'household',         apiName: 'Cleaning & Maintenance',   fallbackId: '1_2432B58',  group: 1 },
+  { name: 'baby',              apiName: 'Baby',                     fallbackId: '1_717A94B',  group: 3 },
+  { name: 'pet',               apiName: 'Pet',                      fallbackId: '1_61D6FEB',  group: 2 },
+  { name: 'front-of-store',    apiName: 'Front of Store',           fallbackId: '1_B63CF9E',  group: 4 },
 ]
+
+// WOOLWORTHS_GROUP env var selects which departments to scrape.
+// Unset = all (backward compatible). "1","2","3","4" = that group only.
+const ACTIVE_GROUP = process.env.WOOLWORTHS_GROUP || null
 
 async function getWoolworthsCookies() {
   const res = await fetch(`${WOOLWORTHS_BASE}/shop/browse/fruit-veg`, { headers: { 'User-Agent': UA }, redirect: 'manual' })
@@ -97,7 +101,11 @@ async function scrapeWoolworths() {
   console.log('Cookies obtained ✓')
 
   const priorCatalogCount = await getStoreProductCount('woolworths').catch(() => null)
-  const departments = await resolveDepartments()
+  const allDepartments = await resolveDepartments()
+  const departments = ACTIVE_GROUP
+    ? allDepartments.filter(d => DEPARTMENTS.find(dd => dd.name === d.name)?.group === parseInt(ACTIVE_GROUP))
+    : allDepartments
+  if (ACTIVE_GROUP) console.log(`[group ${ACTIVE_GROUP}] Scraping ${departments.length}/${allDepartments.length} departments`)
   let total = 0, changes = 0, failedDepts = []
   const throttle = new AdaptiveThrottle({ minDelay: 100, maxDelay: 2000, targetConcurrency: 4 })
   const stats = new Stats('woolworths')

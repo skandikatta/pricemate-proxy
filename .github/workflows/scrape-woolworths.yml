@@ -6,9 +6,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  scrape:
+  # Group 1: household (1584 pages, ~92 min)
+  group1:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,3 +21,55 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           OPTION_C_SHADOW_WRITE: "1"
+          WOOLWORTHS_GROUP: "1"
+
+  # Group 2: pet + pantry (790 pages, ~46 min)
+  group2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install pg
+      - run: node scrape-woolworths.js
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          OPTION_C_SHADOW_WRITE: "1"
+          WOOLWORTHS_GROUP: "2"
+
+  # Group 3: health-beauty + baby (595 pages, ~35 min)
+  group3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install pg
+      - run: node scrape-woolworths.js
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          OPTION_C_SHADOW_WRITE: "1"
+          WOOLWORTHS_GROUP: "3"
+
+  # Group 4: small depts (152 pages, ~9 min)
+  group4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install pg
+      - run: node scrape-woolworths.js
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          OPTION_C_SHADOW_WRITE: "1"
+          WOOLWORTHS_GROUP: "4"
