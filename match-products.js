@@ -137,7 +137,7 @@ function levenshtein(a, b) {
 
 async function loadProducts() {
   const { rows } = await pool.query('SELECT store, product_id, name, brand, size, category, barcode, image_phash FROM products ORDER BY store, name')
-  const byStore = { coles: [], woolworths: [], aldi: [] }
+  const byStore = { coles: [], woolworths: [], aldi: [], iga: [] }
   for (const r of rows) {
     if (byStore[r.store]) {
       byStore[r.store].push({
@@ -164,17 +164,17 @@ function matchLayer0(products) {
   // from finding the correct same-size cross-store match.
   // Now: same barcode AND same sizeNorm required.
   const groups = new Map() // (barcode|sizeNorm) → group
-  for (const store of ['coles', 'woolworths', 'aldi']) {
+  for (const store of ['coles', 'woolworths', 'aldi', 'iga']) {
     for (const p of products[store]) {
       if (!p.barcode) continue
       // sizeNorm null acts as its own bucket — products without size info
       // group amongst themselves, won't merge with sized products on bare barcode.
       const key = `${p.barcode}|${p.sizeNorm || ''}`
-      if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
+      if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, iga: null, display_name: p.name, size: p.sizeNorm })
       if (!groups.get(key)[store]) groups.get(key)[store] = p.product_id
     }
   }
-  return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
+  return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi, g.iga].filter(Boolean).length >= 2)
 }
 
 // Hamming distance for two 64-bit BigInt hashes. Returns 0..64.
@@ -302,7 +302,7 @@ function matchLayer1(products, existingMatched) {
   // is the audit-class fix for the 757caeb failure mode at this layer too.
   const matched = new Set(existingMatched || [])
   const groups = new Map() // key → { coles, woolworths, aldi }
-  for (const store of ['coles', 'woolworths', 'aldi']) {
+  for (const store of ['coles', 'woolworths', 'aldi', 'iga']) {
     for (const p of products[store]) {
       if (!p.sizeNorm || !p.core) continue
       if (matched.has(`${store}_${p.product_id}`)) continue
@@ -312,12 +312,12 @@ function matchLayer1(products, existingMatched) {
       const brandKey = (p.brand || '').toLowerCase().trim()
       if (!brandKey) continue
       const key = `${brandKey}|${p.core}|${p.sizeNorm}`
-      if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, display_name: p.name, size: p.sizeNorm })
+      if (!groups.has(key)) groups.set(key, { coles: null, woolworths: null, aldi: null, iga: null, display_name: p.name, size: p.sizeNorm })
       if (!groups.get(key)[store]) groups.get(key)[store] = p.product_id
     }
   }
   // Only keep groups with 2+ stores
-  return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi].filter(Boolean).length >= 2)
+  return [...groups.values()].filter(g => [g.coles, g.woolworths, g.aldi, g.iga].filter(Boolean).length >= 2)
 }
 
 // Bucket products by sizeNorm for O(1) candidate lookup.
@@ -366,7 +366,7 @@ function matchLayer2(products, existingMatched) {
       }
       if (!variantsMatch(cp.name, wp.name)) continue
       if (levenshtein(cp.core, wp.core) <= 3 && cp.core.length > 5) {
-        groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
+        groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, iga: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
         matched.add(`woolworths_${wp.product_id}`)
         break
@@ -421,7 +421,7 @@ function matchLayer3(products, existingMatched) {
         isMatch = tokenSortRatio(cp.normalized, wp.normalized) >= 0.80
       }
       if (isMatch) {
-        groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, display_name: cp.name, size: cp.sizeNorm })
+        groups.push({ coles: cp.product_id, woolworths: wp.product_id, aldi: null, iga: null, display_name: cp.name, size: cp.sizeNorm })
         matched.add(`coles_${cp.product_id}`)
         matched.add(`woolworths_${wp.product_id}`)
         break
@@ -471,6 +471,7 @@ function matchLayer4(products, existingMatched) {
         coles: bestColes?.product_id || null,
         woolworths: bestWW?.product_id || null,
         aldi: ap.product_id,
+        iga: null,
         display_name: ap.name,
         size: ap.sizeNorm,
       })
@@ -493,12 +494,12 @@ async function saveGroups(groups) {
   for (let i = 0; i < groups.length; i += batchSize) {
     const batch = groups.slice(i, i + batchSize)
     const values = batch.map((g, j) => {
-      const base = j * 5
-      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5})`
+      const base = j * 6
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6})`
     }).join(',')
-    const params = batch.flatMap(g => [g.coles, g.woolworths, g.aldi, g.display_name, g.size])
+    const params = batch.flatMap(g => [g.coles, g.woolworths, g.aldi, g.iga || null, g.display_name, g.size])
     await pool.query(
-      `INSERT INTO product_groups (coles_id, woolworths_id, aldi_id, display_name, size) VALUES ${values}`,
+      `INSERT INTO product_groups (coles_id, woolworths_id, aldi_id, iga_id, display_name, size) VALUES ${values}`,
       params
     )
     inserted += batch.length
@@ -510,7 +511,7 @@ async function main() {
   console.log('=== Product Matcher (4-layer) ===\n')
   console.log('Loading products...')
   const products = await loadProducts()
-  console.log(`  Coles: ${products.coles.length} | Woolworths: ${products.woolworths.length} | Aldi: ${products.aldi.length}\n`)
+  console.log(`  Coles: ${products.coles.length} | Woolworths: ${products.woolworths.length} | Aldi: ${products.aldi.length} | IGA: ${products.iga.length}\n`)
 
   // Layer 0: Barcode match
   const layer0 = matchLayer0(products)

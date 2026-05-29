@@ -120,7 +120,7 @@ app.post('/api/prices/batch', async (req, res) => {
   if (!items || items.length === 0) return res.status(400).json({ error: 'items array required' })
   if (items.length > 100) return res.status(400).json({ error: 'max 100 items per batch' })
 
-  const VALID = new Set(['coles', 'woolworths', 'aldi'])
+  const VALID = new Set(['coles', 'woolworths', 'aldi', 'iga'])
   for (const it of items) {
     if (!it?.store || !VALID.has(it.store) || !it.productId) {
       return res.status(400).json({ error: 'invalid item shape' })
@@ -202,7 +202,7 @@ app.get('/api/eligible-products', async (req, res) => {
   const foodOnly = req.query.food_only === '1'
   const params = [minHistory, limit]
   let storeFilter = ''
-  if (store && ['coles', 'woolworths', 'aldi'].includes(store)) {
+  if (store && ['coles', 'woolworths', 'aldi', 'iga'].includes(store)) {
     params.push(store)
     storeFilter = ` AND pa.store = $${params.length}`
   }
@@ -279,9 +279,9 @@ app.get('/api/search-products', async (req, res) => {
   // gives each store an equal slice; food_only and explicit store filters
   // are passed through.
   const perStoreLimit = Math.max(50, Math.ceil(limit / 3))
-  const stores = requestedStore && ['coles', 'woolworths', 'aldi'].includes(requestedStore)
+  const stores = requestedStore && ['coles', 'woolworths', 'aldi', 'iga'].includes(requestedStore)
     ? [requestedStore]
-    : ['coles', 'woolworths', 'aldi']
+    : ['coles', 'woolworths', 'aldi', 'iga']
 
   // For special_type queries, the price ratio defines the filter band.
   // 'half'      : RANGE 35-65% off (price is 35-65% of was_price). Centred on
@@ -420,7 +420,7 @@ app.post('/api/predictions-batch', async (req, res) => {
   // Validate every (store, productId) before building the WHERE clause —
   // pg parameterised queries handle the SQL-injection side, but we still
   // want clean shape errors before round-tripping the DB.
-  const VALID = new Set(['coles', 'woolworths', 'aldi'])
+  const VALID = new Set(['coles', 'woolworths', 'aldi', 'iga'])
   const pidRe = /^[A-Za-z0-9_-]{1,64}$/
   for (const it of items) {
     if (!it || typeof it !== 'object'
