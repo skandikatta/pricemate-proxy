@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
-      - name: Run scraper on Oracle VM (AU IP required)
+      - name: Run scraper on Oracle VM (AU IP required — CW geo-blocks non-AU)
         env:
           VM_HOST: ${{ secrets.DB_HOST }}
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
@@ -18,4 +18,4 @@ jobs:
           echo "$VM_SSH_KEY" > ~/.ssh/key
           chmod 600 ~/.ssh/key
           ssh -i ~/.ssh/key -o StrictHostKeyChecking=no ubuntu@$VM_HOST \
-            'cd ~/pricemate-proxy && source <(sudo grep DB_PASSWORD /etc/systemd/system/pricemate-api.service.d/env.conf | sed "s/Environment=//;s/\"//g;s/^/export /") && node scrape-chemistwarehouse.js'
+            'cd ~/pricemate-proxy && source <(sudo grep DB_PASSWORD /etc/systemd/system/pricemate-api.service.d/env.conf | sed "s/Environment=//;s/\"//g;s/^/export /") && export OPTION_C_SHADOW_WRITE=1 && node scrape-chemistwarehouse.js'

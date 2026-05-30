@@ -7,6 +7,7 @@ const WOOLWORTHS_BASE = 'https://www.woolworths.com.au'
 // silent "0 products" failure mode in later departments.
 const COOKIE_TTL_MS = 30 * 60 * 1000
 const MIN_EXPECTED_PRODUCTS = 100
+const DEGRADATION_THRESHOLD = 0.70
 const MAX_PAGES_PER_DEPT = 1600
 
 // Curated department list. The display name (apiName) is the stable lookup key —
@@ -187,6 +188,15 @@ async function scrapeWoolworths() {
   console.log(`\nWoolworths done: ${total} products, ${changes} price changes`)
 
   let degraded = false
+  // When running a single group, scale the threshold by the fraction of
+  // departments this group covers. Without this, each group's partial total
+  // is compared against the full catalog and always fires a false alarm.
+  const groupFraction = ACTIVE_GROUP
+    ? departments.length / allDepartments.length
+    : 1
+  const expectedMin = priorCatalogCount
+    ? Math.round(priorCatalogCount * DEGRADATION_THRESHOLD * groupFraction)
+    : null
   if (total === 0) {
     console.warn('WARNING: Zero products scraped. Woolworths API may have changed.')
     console.warn('Existing DB data preserved.')
@@ -194,8 +204,8 @@ async function scrapeWoolworths() {
   } else if (total < MIN_EXPECTED_PRODUCTS) {
     console.warn(`WARNING: Only ${total} products (expected ${MIN_EXPECTED_PRODUCTS}+).`)
     degraded = true
-  } else if (priorCatalogCount && total < priorCatalogCount * 0.7) {
-    console.warn(`WARNING: ${total} products < 70% of prior catalog (${priorCatalogCount}). Likely cookie/auth degradation.`)
+  } else if (expectedMin && total < expectedMin) {
+    console.warn(`WARNING: ${total} products < 70% of expected for this group (~${expectedMin}). Likely cookie/auth degradation.`)
     degraded = true
   }
 

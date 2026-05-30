@@ -1,7 +1,7 @@
-name: Scrape IGA
+name: Scrape Priceline
 on:
   schedule:
-    - cron: '30 19 * * *'  # 5:30am AEST daily
+    - cron: '30 20 * * *'  # 6:30am AEST daily
   workflow_dispatch:
 
 jobs:
@@ -14,9 +14,9 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
-      - name: Scrape IGA
+      - name: Scrape Priceline
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           OPTION_C_SHADOW_WRITE: "1"
-        run: node scrape-iga.js
+        run: node scrape-priceline.js

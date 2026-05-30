@@ -147,8 +147,8 @@ Cookie: <session cookies>
 - `SCRAPE_SUMMARY` JSON in GitHub Actions logs
 - Key fields: `total`, `changes`, `failedDepts`, `degraded`, `priorCatalogCount`
 - `STATS` line: requests, req/sec, items, errors
-- Expected: ~114,000 products across 4 groups, 100-500 changes/day, ~92 min wall time
-- Degradation threshold: < 70% of prior catalog count (per group)
+- Expected: ~54,000 unique products (~65K raw across 4 groups before dedup), 100-500 changes/day, ~92 min wall time
+- Degradation threshold: < 70% of expected for each group (scaled by group's fraction of total departments)
 
 ## DB Tables (Woolworths data)
 
@@ -165,6 +165,7 @@ Cookie: <session cookies>
 
 | Date | Issue | Resolution |
 |------|-------|------------|
+| 2026-05-30 | False degradation warning — per-group total compared against full catalog (53K) | Threshold now scales by `groupFraction` (departments in group / total departments) |
 | 2026-05-29 | Pagination cap (50) too low — 7 depts hit it, lost 35K products | Raised to 1600 (`179ddd3`) |
 | 2026-05-29 | Sequential scrape took 185 min for full catalog | Split into 4 parallel groups (`6517d40`) — wall time ~92 min |
 | 2026-05-29 | `front-of-store` got 401 at 27 min mark | Cookie refresh at 30 min handles it; non-critical dept |
@@ -180,5 +181,5 @@ Cookie: <session cookies>
 | Barcode available | ✅ | ❌ | ❌ |
 | Fallback layers | 1 (cookie refresh) | 4 (Render→direct→Playwright→HTML) | 4 strategies |
 | Typical runtime | 45-60 min | 10-34 min | 3-5 min |
-| Products | ~114,000 | ~33,000 | ~2,700 |
+| Products | ~54,000 | ~33,000 | ~2,700 |
 | Parallel jobs | 4 groups | 1 | 1 |
