@@ -69,12 +69,17 @@
 ## Still pending (manual action needed)
 - [ ] Backfill IGA into v2: `node backfill-internal-ids.js --store iga --apply`
 - [ ] Backfill CW into v2: `node backfill-internal-ids.js --store chemistwarehouse --apply`
-- [ ] Set API_KEY on VM + Vercel (API currently open to internet)
+- [x] ~~Set API_KEY on VM~~ — done (401 without key confirmed)
+- [x] ~~Add API_KEY to Vercel~~ — done (sensitive, redeploy triggered)
+- [ ] Point cheapasmate.com domain to Vercel production when ready to go live
 - [ ] Run `match-products.js --apply` after IGA backfill (populate product_groups.iga_id)
-- [ ] Trigger Priceline manually if first run needs re-run: `gh workflow run scrape-priceline.yml`
+- [ ] Clean up stale SUPABASE_KEY and SUPABASE_URL env vars from Vercel (no longer used)
 
 ## Commits this session
-- `295d919` — Priceline scraper + Woolworths fix + IGA/CW shadow-write + docs
-- `1b47b10` — PRICELINE_SCRAPER.md
-- `78f6feb` — FUTURE_STORES.md
-- `c02d95b` — Update FUTURE_STORES.md (Kmart)
+- `295d919` pricemate-proxy — Priceline scraper + Woolworths fix + IGA/CW shadow-write + docs
+- `1b47b10` pricemate-proxy — PRICELINE_SCRAPER.md
+- `78f6feb` pricemate-proxy — FUTURE_STORES.md
+- `c02d95b` pricemate-proxy — Update FUTURE_STORES.md (Kmart)
+- `63230c4` pricemate-proxy — session notes
+- `e571141` pricemate — API_KEY header via shared dbFetch helper (16 files)
+- `89395bf` pricemate — trigger redeploy for API_KEY env var
