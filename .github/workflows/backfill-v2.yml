@@ -1,0 +1,20 @@
+name: Backfill new stores to v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: SSH into VM and run backfill
+        env:
+          VM_HOST: ${{ secrets.DB_HOST }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VM_SSH_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh -i ~/.ssh/key -o StrictHostKeyChecking=no ubuntu@$VM_HOST \
+            'cd ~/pricemate-proxy && git pull && source <(sudo grep DB_PASSWORD /etc/systemd/system/pricemate-api.service.d/env.conf | sed "s/Environment=//;s/\"//g;s/^/export /") && node backfill-new-stores.js --apply && node match-products.js --apply'
