@@ -71,7 +71,7 @@ Price changes/day: 1-50 (Aldi-like stability)
 ## v2 (Passport) Status
 
 - Shadow-write: ✅ enabled (as of 2026-05-30)
-- Backfill of existing products: pending (run `backfill-internal-ids.js --store iga`)
+- Backfill of existing products: ✅ `backfill-new-stores.js --apply` (workflow: "Backfill new stores to v2")
 - Cross-store matching: `product_groups.iga_id` column exists (migration 007)
 - Matcher coverage: included in `match-products.js` Layer 0 (barcode) + Layers 1-3
 

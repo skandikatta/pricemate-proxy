@@ -87,7 +87,8 @@ Categories: hierarchical (3 levels)
 
 ## v2 (Passport) Status
 
-- Shadow-write: ✅ enabled
+- Shadow-write: ✅ enabled from first run (workflow had `OPTION_C_SHADOW_WRITE=1` from day one)
+- Backfill: NOT needed — all products already have passports via shadow-write
 - Cross-store matching with CW: possible (same pharmacy products, shared brands like Panadol/Swisse/Colgate)
 - Predictions: NOT active yet (not in VALID store set on API endpoints)
 - Purpose: unbroken price history + ready for v1 decommission

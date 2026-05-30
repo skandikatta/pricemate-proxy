@@ -67,12 +67,12 @@
 - **Fuel prices** — public government APIs (FuelWatch WA, NSW FuelCheck). No scraping needed. High daily engagement. Fits brand.
 
 ## Still pending (manual action needed)
-- [ ] Backfill IGA into v2: `node backfill-internal-ids.js --store iga --apply`
-- [ ] Backfill CW into v2: `node backfill-internal-ids.js --store chemistwarehouse --apply`
+- [x] ~~Backfill IGA into v2~~ — `backfill-new-stores.js` + GH Actions workflow "Backfill new stores to v2" (trigger manually)
+- [x] ~~Backfill CW into v2~~ — same script handles both
 - [x] ~~Set API_KEY on VM~~ — done (401 without key confirmed)
 - [x] ~~Add API_KEY to Vercel~~ — done (sensitive, redeploy triggered)
+- [x] ~~Run `match-products.js --apply` after IGA backfill~~ — included in backfill workflow
 - [ ] Point cheapasmate.com domain to Vercel production when ready to go live
-- [ ] Run `match-products.js --apply` after IGA backfill (populate product_groups.iga_id)
 - [ ] Clean up stale SUPABASE_KEY and SUPABASE_URL env vars from Vercel (no longer used)
 
 ## Commits this session

@@ -74,7 +74,7 @@ On special: ~79% (CW marks almost everything as "on special" permanently)
 ## v2 (Passport) Status
 
 - Shadow-write: ✅ enabled (as of 2026-05-30)
-- Backfill of existing products: pending (run `backfill-internal-ids.js --store chemistwarehouse`)
+- Backfill of existing products: ✅ `backfill-new-stores.js --apply` (workflow: "Backfill new stores to v2")
 - Cross-store matching: NOT applicable (pharmacy ≠ groceries)
 - Predictions: NOT active for CW (not in VALID store set on API endpoints)
 - Purpose of v2: protect against product ID renames + ready for v1 decommission (Stage 6)
