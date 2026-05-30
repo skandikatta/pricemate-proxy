@@ -78,7 +78,8 @@ app.get('/api/prices', async (req, res) => {
 })
 
 app.get('/api/price-history', async (req, res) => {
-  const { store, product_id, days = 180 } = req.query
+  const { store, product_id } = req.query
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 180, 1), 365)
   if (!store || !product_id) return res.status(400).json({ error: 'store and product_id required' })
   const { rows } = await pool.query(
     `SELECT price, was_price, is_on_special, scraped_at FROM price_history WHERE store=$1 AND product_id=$2 AND scraped_at > NOW() - ($3 || ' days')::interval ORDER BY scraped_at ASC`,
@@ -89,7 +90,8 @@ app.get('/api/price-history', async (req, res) => {
 
 
 app.get('/api/price-history-v2', async (req, res) => {
-  const { store, product_id, days = 180 } = req.query
+  const { store, product_id } = req.query
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 180, 1), 365)
   if (!store || !product_id) return res.status(400).json({ error: 'store and product_id required' })
   const { rows } = await pool.query(
     `WITH passport AS (

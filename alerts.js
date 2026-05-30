@@ -6,12 +6,22 @@
 // token is sufficient for all operations (no separate user/password system).
 
 const crypto = require('crypto')
+const rateLimit = require('express-rate-limit')
+
+// Tight rate limit for email-sending endpoints (5 req/min/IP).
+const subscribeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — try again in a minute' },
+})
 
 function register(app, pool) {
 
   // --- Alerts: subscribe / confirm / unsubscribe ---
 
-  app.post('/api/alerts/subscribe', async (req, res) => {
+  app.post('/api/alerts/subscribe', subscribeLimiter, async (req, res) => {
     const { email, frequency, scope } = req.body || {}
     if (!email || !frequency || !scope) return res.status(400).json({ error: 'email, frequency, scope required' })
 

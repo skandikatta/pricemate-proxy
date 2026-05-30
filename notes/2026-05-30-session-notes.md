@@ -83,3 +83,17 @@
 - `63230c4` pricemate-proxy — session notes
 - `e571141` pricemate — API_KEY header via shared dbFetch helper (16 files)
 - `89395bf` pricemate — trigger redeploy for API_KEY env var
+
+## Security Review Fixes (late session)
+
+### P1 fixes applied
+1. **`days` param validation** — `/api/price-history` and `/api/price-history-v2` now `parseInt` + clamp (1–365, default 180). Previously non-numeric values caused 500 errors.
+2. **Subscribe rate limit** — `/api/alerts/subscribe` now has a dedicated 5 req/min/IP limiter (was only protected by the global 300/min). Prevents email-bombing via the confirmation flow.
+
+### P2 fixes applied
+3. **Pool error handler** — `pool.on('error', ...)` added to `db.js`. Prevents unhandled idle-client disconnects from crashing the process.
+
+### Files changed
+- `api-server.js` — days param validation on both price-history endpoints
+- `alerts.js` — added `express-rate-limit` import + `subscribeLimiter` (5/min/IP)
+- `db.js` — pool error handler

@@ -18,6 +18,7 @@ const pool = new Pool({
 if (!process.env.DB_PASSWORD) {
   console.error('FATAL: DB_PASSWORD env var is not set'); process.exit(1)
 }
+pool.on('error', (err) => console.error('[pool] idle client error:', err.message))
 
 /**
  * Normalize a product name for matching.
