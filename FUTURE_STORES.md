@@ -100,12 +100,24 @@ Search pages: Next.js but __NEXT_DATA__ is empty (client-rendered)
 
 **Tested 2026-05-30:** 403 from AU IP on all endpoints.
 
+## Blocked But Has Overlap
+
+### Kmart — ⚠️ Hard (403, Cloudflare)
+
+- **Overlap:** Pantry basics, cleaning, health/beauty, baby, pet
+- **Products:** ~5,000 in overlapping categories
+- **Anti-bot:** Cloudflare (returns 403 on all pages)
+- **Same parent as:** Bunnings + Priceline (Wesfarmers) — but different stack/protection
+- **Effort:** High (Playwright + stealth needed)
+- **Value:** Low-medium — cheap basics but limited range vs Coles/Woolies
+
+**Tested 2026-05-30:** 403 on search pages, no __NEXT_DATA__, no public API.
+
 ## Not Worth Pursuing
 
 | Store | Reason |
 |-------|--------|
-| Kmart | No grocery/pharmacy overlap, general merchandise only |
-| Target AU | Closing stores, limited online |
+| Target AU | Closing/merging into Kmart — dead brand |
 | Officeworks | Niche (stationery/tech), no overlap with current stores |
 
 ## Priority Order (recommended)
