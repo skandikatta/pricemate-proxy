@@ -97,3 +97,18 @@
 - `api-server.js` — days param validation on both price-history endpoints
 - `alerts.js` — added `express-rate-limit` import + `subscribeLimiter` (5/min/IP)
 - `db.js` — pool error handler
+
+
+## TODO: Pharmacy cross-store matching (Chemist Warehouse ↔ Priceline)
+
+Both stores share thousands of brands (Panadol, Swisse, Colgate, L'Oréal, Neutrogena, etc.). Currently matched independently — no cross-store compare between CW and Priceline.
+
+**Plan:**
+- Add `priceline_id` and `chemistwarehouse_id` columns to `product_groups` (or a separate `pharmacy_groups` table)
+- Extend `match-products.js` with a pharmacy matching pass (same Layer 0-3 logic, separate from grocery)
+- Neither store has barcodes → Layer 0 won't fire. Rely on Layers 1-3 (brand+size+name)
+- Both have good brand data → Layer 1 (exact match) should catch most overlaps
+
+**Value:** "Panadol 20pk is $4.59 at Priceline vs $6.99 at CW" — direct price comparison for pharmacy products.
+
+**Effort:** ~1-2 hours. No schema changes needed if we add columns to existing `product_groups`.
