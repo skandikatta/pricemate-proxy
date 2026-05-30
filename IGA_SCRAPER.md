@@ -74,6 +74,7 @@ Price changes/day: 1-50 (Aldi-like stability)
 - Backfill of existing products: ✅ `backfill-new-stores.js --apply` (workflow: "Backfill new stores to v2")
 - Cross-store matching: `product_groups.iga_id` column exists (migration 007)
 - Matcher coverage: included in `match-products.js` Layer 0 (barcode) + Layers 1-3
+- Barcodes: ❌ IGA API does NOT expose barcodes (docs were wrong). Enrichment via Open Food Facts only.
 
 ## Monitoring
 

@@ -106,7 +106,7 @@ async function enrich() {
   console.log('\nFetching Coles + Aldi products without barcode...')
   const { rows: targets } = await pool.query(
     `SELECT store, product_id, name, brand FROM products
-     WHERE store IN ('coles','aldi') AND barcode IS NULL`
+     WHERE store IN ('coles','aldi','woolworths','chemistwarehouse','priceline','iga') AND barcode IS NULL`
   )
   console.log(`  Targets: ${targets.length}`)
 
